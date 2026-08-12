@@ -1,0 +1,341 @@
+{
+  "failed_directions": [
+    {
+      "iter": 7,
+      "channel": "code_innovation",
+      "direction": "参考自适应 anti-windup PID 对偶更新：SNR 分桶乘子加条件积分抗饱和（λ 触顶且仍违约时冻结积分）+ dead-zone 误差死区 + 以桶 delivery EMA 为参考的自适应阈值 d_b*=min(threshold, EMA+margin) 单调递增，消除不可行桶 windup 烧功率",
+      "params_tried": {},
+      "verdict": "护栏拦截: 修改了白名单外文件: scripts/optimize_loop.py",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 21,
+      "channel": "code_innovation",
+      "direction": "Dinkelbach分式奖励重构+State-Augmented观测：每步EE奖励改为r_t=rate_t−η·power_t（η为功率影子价格，外层每10episode按Σrate/Σpower的EMA线性收敛更新、首周期自动锚定实测EE），并将λ桶值/DVQ积压/η归一化后注入观测（优先等维替换保持obs维度不变），delivery约束通道Lagrangian/DVQ/CVaR原封不动",
+      "params_tried": {},
+      "verdict": "护栏拦截: qodercli 未产生任何文件改动",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 24,
+      "channel": "code_innovation",
+      "direction": "第二轴课程——w_power_exceed性能触发爬升+词典序门控：难度课程冻结后启动，功率超限惩罚权重从现值×1.2/档乘性爬升（8-12档至cap），每档推进门控=近50ep窗口内达标点数不降且平均delivery≥0.90（delivery字典序保护），<0.89连续2窗回退一档、同档2次回退冻结200ep滞回",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 26,
+      "channel": "code_innovation",
+      "direction": "逐桶独立状态机差异化功率惩罚调度：4个SNR桶各维护独立(w_b,stage_b,win_b)，env每episode按场景桶查表取标量w_power_exceed（差异化全在调度层、env零改动）；达标有裕量(≥0.01)的桶×1.2/档爬升，裕量<0.01的边际桶立即回退一档+冻结2窗（退快进慢不对称滞回），并设全局达标点数棘轮否决（低于历史最好值期间禁止任何桶推进防桶间泄漏）",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 28,
+      "channel": "code_innovation",
+      "direction": "全信号+易环境双信号课程（从头重训+早期功率压力锚定）：在已验证的CuRLTraC难度课程第一档易达标区就设w_power_exceed=目标值×30%且全程恒定不爬升，与CuRLTraC同生命周期耦合（达标率≥β=0.5才升难度档，功率压力使策略必须学会低功率达标才能过档）；最易档连续3窗口不达标则压力减半（保险丝、单次单向）；到达评估档后压力不变训至收敛",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 30,
+      "channel": "code_innovation",
+      "direction": "梯度操纵Primal安全优化：PPO更新时将reward损失与delivery约束损失拆为双梯度流，冲突时将EE梯度投影到delivery约束梯度的零空间（delivery优先、达标后自动退火纯优化EE），替代被优势归一化稀释的标量Lagrangian注入",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 31,
+      "channel": "code_innovation",
+      "direction": "双探针纯评估（零训练）去三重混淆：探针A扫描5个group_alpha窗口定死alpha→功率因果方向，探针B切perfect CSI验证'功率对冲均衡'假设，附带功率头饱和诊断；一次实验区分'信号失效/策略不可达/物理不存在'，阳性轴下轮触发对应课程（alpha窗口硬约束+重训 或 CSI质量ADR退火课程）",
+      "params_tried": {},
+      "verdict": "护栏拦截: 修改了白名单外文件: scripts/run_dual_probes.py",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 33,
+      "channel": "code_innovation",
+      "direction": "梯度操纵Primal安全优化：PPO更新时将reward损失与delivery约束损失拆为双梯度流，冲突时将EE梯度投影到delivery约束梯度的零空间（delivery优先、达标后自动退火纯优化EE），替代被优势归一化稀释的标量Lagrangian注入",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 35,
+      "channel": "code_innovation",
+      "direction": "梯度操纵Primal安全优化：PPO更新时将reward损失与delivery约束损失拆为双梯度流，冲突时将EE梯度投影到delivery约束梯度的零空间（delivery优先、达标后自动退火纯优化EE），替代被优势归一化稀释的标量Lagrangian注入",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 37,
+      "channel": "code_innovation",
+      "direction": "CVPO-V-MPO Stage1精确对偶求解+强制管线验尸捆绑：lagrangian.py每batch scipy SLSQP从零解(η,λ1..4)替代PID增量更新（~30行+config 6字段，已定稿），验尸门三件套（checkpoint路径+hash+mtime、loss末段斜率、λ*每batch日志）升级为交付硬门槛——缺凭据判执行失败而非方向失败，一次运行同时清算'CVPO是否有效",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 40,
+      "channel": "code_innovation",
+      "direction": "SIC双顺序短评估+管线指纹+强制回传三合一（纯评估零训练26行）：冻结policy下对Plackett-Luce排序logits分别注入κ=5.0降序/升序偏置各评50集——两顺序结果不同则PIPELINE_OK且免费获得SIC杠杆因果方向（候选方向下轮触发κ退火课程），逐bit相同则管线损坏实锤；捆绑ckpt sha256+param_fp指纹print与6字段强制回传schema（缺字段本轮",
+      "params_tried": {},
+      "verdict": "护栏拦截: 修改了白名单外文件: scripts/evaluate_sic_order_probe.py",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 42,
+      "channel": "code_innovation",
+      "direction": "方案A——scripts/baselines/sic_order_probe.py合规新文件（白名单允许）承载SIC双顺序基线评估+管线指纹：顺应qodercli'评估归脚本'的架构洁癖（内联评估块0/3违规率vs既有src文件4/4忠实率），把抽脚本倾向从违规变为合规；冻结policy下desc/asc两方向各评50集，orders不同则PIPELINE_OK且免费获得SIC杠杆因果方向，逐bi",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 44,
+      "channel": "hyperparameter",
+      "direction": "超参通道管线活性探针（smoke test）：delivery_threshold从0.95降到0.5，用唯一100%忠实执行的环路原生通道验证训练-评估链路活性——指标动则管线活、下轮切group_alpha轴（v=1.0对照→v∈{0.7,0.85,1.15}双侧扫描），指标仍逐bit冻结则连原生超参通道都失效=环路级基础设施损坏实锤，应升级为用户侧bug排查",
+      "params_tried": {
+        "delivery_threshold": 0.5
+      },
+      "verdict": "score [4, 0.8886, -13.3843, 0.7005] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 46,
+      "channel": "hyperparameter",
+      "direction": "group_alpha轴启动——v=1.0等权对照组：group_alpha_min=group_alpha_max=1.0关闭private流几何功率缩放（s=v^(k-1)≡1），delivery_threshold恢复0.95单因子原则；一次实验回答'group_alpha当前在帮忙还是帮倒忙'并兼测从best重训的基线方差（噪声标尺），为后续收紧侧{0.85,0.7}扫描定基准；环路'未超",
+      "params_tried": {
+        "group_alpha_min": 1.0,
+        "group_alpha_max": 1.0,
+        "delivery_threshold": 0.95
+      },
+      "verdict": "score [5, 0.8967, -12.9271, 0.6796] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 48,
+      "channel": "hyperparameter",
+      "direction": "group_alpha轴v=0.9单点轻探（收紧是否伤点数的实证边界）：group_alpha_min=group_alpha_max=0.9温和收紧private流功率几何缩放（尾部份额0.9^23≈0.089），delivery_threshold维持0.95；与v=1.0同税对照比四项delta——保点且EE↑/power↓则下轮渐进v=0.85，丢点则全局收紧证伪、下下轮转逐桶自适应v（高",
+      "params_tried": {
+        "group_alpha_min": 0.9,
+        "group_alpha_max": 0.9,
+        "delivery_threshold": 0.95
+      },
+      "verdict": "score [5, 0.8944, -13.2014, 0.6763] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 50,
+      "channel": "code_innovation",
+      "direction": "逐桶自适应group_alpha查表调度（7评估点渐变v值，低SNR点v→1.0保delivery/高SNR点v=0.7激进省功率）：train.py episode reset按当前SNR最近邻查表setattr(env, group_alpha_min/max)（env第924行实时读则零env改动，缓存则≤2行reset重读），config加≤9字段；机制=相对分配整形器逐点差异化（低SNR",
+      "params_tried": {},
+      "verdict": "score [4, 0.874, -14.5086, 0.7025] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 52,
+      "channel": "code_innovation",
+      "direction": "Relaxed-IPO对数障碍+SCPO状态级交付配额信用：奖励从episode末标量λ线性惩罚改为 r_t=EE_t+(1/V_b)·log(margin_t+ε)，margin_t=累计交付进度−thr·(t/T)的逐步配额余量，margin≤δ切线延拓防−inf，与CuRLTraC课程退火联动",
+      "params_tried": {},
+      "verdict": "score [4, 0.9074, -12.8971, 0.7106] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 54,
+      "channel": "code_innovation",
+      "direction": "桶级CRPO交替更新+激活指纹硬门槛：落点移至ppo.py更新规则层，每次update前查各SNR桶delivery_EMA——全桶≥target−η走正常EE步、任一违约则advantage替换为cost-GAE且仅违约桶样本非零权重；η随CuRLTraC课程0.05→0.01收紧；内嵌update计数器+uuid nonce+src哈希manifest写入回传schema，判别改动是否真被执行",
+      "params_tried": {},
+      "verdict": "score [5, 0.9027, -12.2371, 0.6883] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 56,
+      "channel": "code_innovation",
+      "direction": "桶上下文条件化观测增广（CCPO式约束条件化）：rsma_env.py观测末端替换6维冗余/常数特征为[桶索引/本桶delivery_EMA−target余量/episode delivery短缺紧迫度/桶级λ_b/功率超支比例/课程进度]，value+critic同步接收，余量特征训练期±ε抖动随课程退火，内嵌计数器指纹硬门槛",
+      "params_tried": {},
+      "verdict": "score [5, 0.8823, -13.2557, 0.6829] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 58,
+      "channel": "code_innovation",
+      "direction": "双评论家字典序PPO样本级优先级掩码：models/加共享encoder双value头（V_D拟合delivery塑形回报含DVQ、V_EE拟合EE回报，均全样本回归），ppo.py分别GAE各自标准化后按mask=(|A_D|>τ)逐样本合成A=where(mask,A_D,β·A_EE)，τ为delivery无差异带宽随CuRLTraC从~1.0σ退火至~0.3σ，掩码只作用policy梯度，",
+      "params_tried": {},
+      "verdict": "score [4, 0.8884, -13.3843, 0.68] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 59,
+      "channel": "code_innovation",
+      "direction": "双评论家字典序PPO样本级优先级掩码：models/加共享encoder双value头（V_D拟合delivery塑形回报含DVQ、V_EE拟合EE回报，均全样本回归），ppo.py分别GAE各自标准化后按mask=(|A_D|>τ)逐样本合成A=where(mask,A_D,β·A_EE)，τ为delivery无差异带宽随CuRLTraC从~1.0σ退火至~0.3σ，掩码只作用policy梯度，",
+      "params_tried": {},
+      "verdict": "qodercli 施工超时（1500s）",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 61,
+      "channel": "code_innovation",
+      "direction": "桶级自模仿学习（SIL）锚定自身高delivery轨迹：src/training/新增per-SNR桶exemplar缓冲（存delivery达标且低功率的自身历史回合），PPO update后加辅助模仿损失−logπ(a|s)·max(R_D−V(s),0)强化已达标行为防课程遗忘，与CuRLTraC联动逐阶段刷新缓冲，指纹门槛入metrics",
+      "params_tried": {},
+      "verdict": "score [5, 0.8861, -14.6271, 0.696] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 2,
+      "channel": "code_innovation",
+      "direction": "桶级自模仿学习（SIL）锚定自身高delivery轨迹（轻量化单文件）：src/training/新增per-SNR桶exemplar缓冲存delivery达标且低功率的自身历史回合，ppo.py仅加1辅助步L_SIL=−logπ(a|s)·max(R_D−V,0)强化已达标行为防课程遗忘，train.py按桶入缓冲并与CuRLTraC联动逐阶段刷新，指纹入metrics",
+      "params_tried": {},
+      "verdict": "score [5, 0.9027, -11.9614, 0.6989] 未超过 best [5, 0.9037, -12.0071, 0.6866]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 3,
+      "channel": "code_innovation",
+      "direction": "桶专家多头actor（策略结构容量分化）：models/将actor最终线性层从best深拷贝为G=4个SNR桶专家头+one-hot硬路由（step-0逐bit==best起点零损失），冻结共享主干仅小lr微调各头（每头只在本桶数据上更新），critic共享，train.py按episode的SNR桶硬路由（episode内不切换），step-0等值断言+per-head梯度范数+逐桶路由计数入",
+      "params_tried": {},
+      "verdict": "qodercli 施工超时（1500s）",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 7,
+      "channel": "code_innovation",
+      "direction": "课程末段定向精修+受控探索注入（PATH式主动课程精修）：CuRLTraC冻结在评估配置后，对2个未达标SNR点的shortfall权重w_hard上调（如2→4）并延长冻结训练≥500ep，同时在actor注入小幅参数空间噪声（或entropy bonus×1.5）助其逃离当前鞍点；达标点用base地板≥1/(2K)保护防回归",
+      "params_tried": {},
+      "verdict": "score [5, 0.8944, -12.61, 0.6831] 未超过 best [5, 0.9123, -11.2, 0.6934]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 10,
+      "channel": "code_innovation",
+      "direction": "逐点挖掘原料的贪心字典序模型汤（SWA/权重平均）：取逐点硬例挖掘课程末段5-10个同源checkpoint做贪心权重平均——按单支字典序score排序、逐支加入仅当汤的字典序score不降才保留，平坦化尖锐极小抑制达标点震荡；原料不足则从best分叉N=3短程逐点挖掘分支喂汤（仅变w_hard/种子），零训练成本主路径，soup_enable=False回退best",
+      "params_tried": {},
+      "verdict": "score [5, 0.913, -11.7686, 0.6918] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 12,
+      "channel": "code_innovation",
+      "direction": "贪心字典序模型汤（SWA/权重平均）：复用逐点硬例挖掘课程末段已有checkpoint（不足则best分叉N=3短分支仅变seed/w_hard补料+末段加密存ckpt），按单模型严格字典序score降序逐个尝试加入平均、同一评估种子集下字典序不降才保留，终选{贪心汤,均匀汤,单最优}取优；贪心汤永不劣于单最优ckpt无回退风险",
+      "params_tried": {},
+      "verdict": "score [5, 0.913, -11.7686, 0.6918] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 2,
+      "channel": "code_innovation",
+      "direction": "分位数critic（DisPPO式分布价值表征）：models/将critic末层1→16维non-crossing分位数头（用现有value头初始化使全部分位数=当前V预测，step-0与best行为一致），training/价值损失换quantile Huber(κ=1,τ_i=(2i−1)/32)、advantage取分位数均值（GAE流程不变），消除7个SNR点多峰混合回报下均值criti",
+      "params_tried": {},
+      "verdict": "score [5, 0.8929, -13.4, 0.6833] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 3,
+      "channel": "code_innovation",
+      "direction": "分位数critic（DisPPO式分布价值表征）：models/将critic末层1→16维non-crossing分位数头（用现有value头初始化使全部分位数=当前V预测，step-0与best行为一致），training/价值损失换quantile Huber(κ=1,τ_i=(2i−1)/32)、advantage取分位数均值（GAE流程不变），消除7个SNR点多峰混合回报下均值criti",
+      "params_tried": {},
+      "verdict": "快速测试门禁失败 (6 用例): tests/test_training.py::TestActorCritic::test_forward_shape; tests/test_training.py::TestActorCritic::test_evaluate_actions_shape; tests/test_training.py::TestActorCritic::test_log_prob_finite; tests/test_training.py::TestActorCriticPL::test_forward_shape_pl; tests/test_training.py::TestActorCriticPL::test_evaluate_actions_pl",
+      "rounds_tried": 0
+    },
+    {
+      "iter": 3,
+      "channel": "code_innovation",
+      "direction": "分位数critic（DisPPO式分布价值表征）：models/将critic末层1→16维non-crossing分位数头（用现有value头初始化使全部分位数=当前V预测，step-0与best行为一致），training/价值损失换quantile Huber(κ=1,τ_i=(2i−1)/32)、advantage取分位数均值（GAE流程不变），消除7个SNR点多峰混合回报下均值criti",
+      "params_tried": {},
+      "verdict": "快速测试门禁失败 (6 用例): tests/test_training.py::TestActorCritic::test_forward_shape; tests/test_training.py::TestActorCritic::test_evaluate_actions_shape; tests/test_training.py::TestActorCritic::test_log_pr",
+      "rounds_tried": 1
+    },
+    {
+      "iter": 5,
+      "channel": "hyperparameter",
+      "direction": "lagrangian_max=100向上解锁解除λ饱和（iter-52起拖欠6轮的#1欠账）：λ被50截断等价系统性偏低、使PID积分项失效（anti-windup病理），与2个未达标SNR点持续违约精确同构；向上=增强delivery约束压力零牺牲风险，诊断λ轨迹稳定(50,100)且未达标点delivery升则确认饱和污染历史code判定",
+      "params_tried": {
+        "lagrangian_max": 100
+      },
+      "verdict": "score [5, 0.913, -11.7686, 0.6918] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 7,
+      "channel": "hyperparameter",
+      "direction": "lagrangian_max=100向上解锁解除λ饱和（iter-52起拖欠6轮的#1欠账）：λ被50截断等价系统性偏低、使PID积分项失效（anti-windup病理），与2个未达标SNR点持续违约精确同构；向上=增强delivery约束压力零牺牲风险，诊断λ轨迹稳定(50,100)且未达标点delivery升则确认饱和污染历史code判定",
+      "params_tried": {
+        "lagrangian_max": 100
+      },
+      "verdict": "score [5, 0.913, -11.7686, 0.6918] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 9,
+      "channel": "code_innovation",
+      "direction": "逐评估点advantage温度重加权：ppo.py中按样本所属SNR评估点的shortfall_p=max(0,target_p−delivery_EMA_p)对delivery-cost advantage分量连续重加权w_p=1+κ·shortfall_p（EMA防震荡，κ=2.5起随CuRLTraC退火），未达标点样本梯度贡献放大；仅加权delivery-cost分量而采样保持混合，规避精修",
+      "params_tried": {},
+      "verdict": "score [5, 0.9073, -12.4057, 0.6902] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 11,
+      "channel": "code_innovation",
+      "direction": "逐评估点advantage温度重加权：ppo.py按样本所属SNR评估点shortfall_p=max(0,target_p−delivery_EMA_p)对delivery-cost advantage分量连续重加权w_p=1+κ·shortfall_p（κ=2.5起随CuRLTraC退火、shortfall用EMA），未达标点梯度贡献放大且不减达标点曝光",
+      "params_tried": {},
+      "verdict": "score [5, 0.9124, -11.8686, 0.6902] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 3,
+      "channel": "hyperparameter",
+      "direction": "激活既有引导通路探针：blend_alpha=0.1小步启用引导动作混合（从未被触碰的既有旋钮），若指标偏离冻结基线则证实model-based引导通路实装且有效，开启与全部失败族（纯RL机制改动）结构正交的solver-in-the-loop新族",
+      "params_tried": {
+        "V": "V_current*0.25",
+        "V_min": "V_min_current*0.25",
+        "V_max": "V_max_current*0.25",
+        "blend_alpha": 0.1
+      },
+      "verdict": "score [5, 0.914, -11.7057, 0.6932] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    },
+    {
+      "iter": 2,
+      "channel": "code_innovation",
+      "direction": "低SNR alpha天花板门控（MVP）：config加per-bucket alpha_ceiling（0/5dB桶≈0.05-0.1强制近SDMA，其余桶=1.0无操作），rsma_env._parse_action中alpha=np.minimum(alpha, ceiling(当前SNR桶))。只做这一处门控，不做采样倾斜/课程改动",
+      "params_tried": {},
+      "verdict": "score [4, 0.8951, -12.8386, 0.6899] 未超过 best [5, 0.9163, -11.0186, 0.6914]，2 轮验证失败",
+      "rounds_tried": 2
+    }
+  ],
+  "successful_directions": [
+    {
+      "iter": 22,
+      "channel": "code_innovation",
+      "direction": "性能触发式难度退火课程（CuRLTraC风格）：训练从易达标区（load_ratio_max=0.8、snr_min=5dB）起步，维护近50个episode逐点delivery达标率，≥β=0.5才推进一档难度（5档线性退火到评估配置load_max=1.3/snr_min=-5dB），<0.3连续20ep回退一档滞回，到达评估配置后冻结收尾训练≥500ep",
+      "params_tried": {},
+      "gain": "score [4, 0.9331, -11.0257, 0.9382] -> [5, 0.9037, -12.0071, 0.6866]"
+    },
+    {
+      "iter": 4,
+      "channel": "code_innovation",
+      "direction": "CuRLTraC定向硬例挖掘（ALP-GMM式任务空间主动重采样）：train.py维护逐桶delivery缺口shortfall_b=max(0,target_b−delivery_EMA_b)，按p_b∝base+w_hard×shortfall_b重加权episode的SNR采样分布，把训练曝光导向2个未达标点；base概率地板≥1/(2K)防已达标点回归，shortfall慢EMA防震荡，",
+      "params_tried": {},
+      "gain": "score [5, 0.9037, -12.0071, 0.6866] -> [5, 0.9119, -11.3857, 0.6927]"
+    },
+    {
+      "iter": 5,
+      "channel": "code_innovation",
+      "direction": "CuRLTraC定向硬例挖掘（ALP-GMM式任务空间主动重采样）：train.py维护逐桶delivery缺口shortfall_b=max(0,target_b−delivery_EMA_b)，按p_b∝base+w_hard×shortfall_b重加权episode的SNR采样分布，把训练曝光导向2个未达标点；base概率地板≥1/(2K)防已达标点回归，shortfall慢EMA防震荡，",
+      "params_tried": {},
+      "gain": "score [5, 0.9119, -11.3857, 0.6927] -> [5, 0.9123, -11.2, 0.6934]"
+    },
+    {
+      "iter": 8,
+      "channel": "code_innovation",
+      "direction": "逐评估点细粒度硬例挖掘+未达标点定向熵激励：shortfall从4桶细化为7个SNR评估点（消除桶内稀释），连续未达标streak倍增采样权重（封顶），且仅对未达标点episode提高entropy bonus×1.5注入鞍点逃逸扰动；达标点熵不变+base地板保护",
+      "params_tried": {},
+      "gain": "score [5, 0.9123, -11.2, 0.6934] -> [5, 0.9163, -11.0186, 0.6914]"
+    }
+  ]
+}

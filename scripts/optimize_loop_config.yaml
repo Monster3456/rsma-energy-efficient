@@ -1,0 +1,228 @@
+# SA-GAT PPO 自动优化循环配置
+# 本文件定义所有不可变约束、终止条件、安全边界和运行参数
+
+# ============================================================
+# 不可变约束 — Loop 的任何迭代均不可修改以下内容
+# ============================================================
+immutable:
+  system_model: "MIMO-RSMA uplink, K=24, N_r=16, RZF, MMSE-SIC"
+  architecture: "Hierarchical PPO: SA-GAT Worker + Meta-Controller"
+  action_space: "4K=96 dim (alpha, p_total, d_ratio, Plackett-Luce)"
+  env_physics: "locked"
+  eval_standard: "locked"
+  snr_range: [-5, 35]  # dB
+  csi_mode: "imperfect"
+  num_users: 24
+  num_antennas: 16
+
+# ============================================================
+# 终止条件 — 全7个SNR点同时满足即为成功
+# ============================================================
+termination:
+  # 相对目标（相对 SDMA 基线，逐 SNR 点判定）—— 高SNR下绝对值目标物理不可达
+  delivery_sdma_ratio: 1.0  # delivery ≥ SDMA_delivery × 此值
+  queue_sdma_ratio: 1.1     # queue ≤ SDMA_queue × 此值
+  ee_advantage_min: 1.05    # mean(EE) > mean(SDMA_EE) × 此值
+  power_constraint: "less_than_sdma"  # mean(power) < mean(SDMA_power)
+  snr_points: [0, 5, 10, 15, 20, 25, 30]
+
+# ============================================================
+# 安全边界 — 触发任一即优雅退出
+# ============================================================
+safety:
+  max_iterations: 60
+  max_stalled_directions: 10   # 连续N个方向停滞无突破则退出（替代轮计数）
+  max_consecutive_no_improvement: 10  # 兼容保留
+  max_runtime_hours: 72
+
+# ============================================================
+# 快速验证训练参数
+# ============================================================
+fast_training:
+  episodes: 1500
+  rollout_steps: 2048
+  batch_size: 64
+  device: "cpu"
+  csi_mode: "imperfect"
+  exp_name_prefix: "opt_iter"
+
+# ============================================================
+# 快速测试门禁（训练前置信号层）
+# 每轮训练前运行标记为 fast 的轻量用例（tests/ 中 pytest -m fast），
+# 失败则本轮直接判失败、不进入训练
+# ============================================================
+fast_gate:
+  enabled: true
+  marker: "fast"              # pytest marker，标记 tests/ 中的轻量确定性用例
+  timeout_seconds: 120        # 目标约 2 分钟内完成，超时即判失败
+  test_paths: ["tests/"]
+
+# ============================================================
+# 评估参数
+# ============================================================
+evaluation:
+  n_episodes: 50      # 20→50：逐点 delivery 对比的统计噪声降低 ~37%（10dB 点 0.2% 差距原在噪声内）
+  snr_points: [0, 5, 10, 15, 20, 25, 30]
+  baselines: ["sdma"]  # 仅评估 PPO vs SDMA（跳过 NOMA/EqualPower 以加速）
+
+# ============================================================
+# 模式升级触发条件
+# ============================================================
+escalation:
+  # 停滞N个方向 → 触发创新搜索（代码创新 + IEEE/GitHub 双源检索）
+  innovation_directions: 1
+  # 停滞N个方向 → 加大创新力度（激进结构改动）
+  aggressive_directions: 6
+  # 兼容保留
+  no_improvement_rounds: 1
+  # delivery低于此阈值 → 直接触发创新搜索
+  delivery_gap_threshold: 0.90
+  # EE全域低于SDMA → 直接触发
+  ee_below_sdma: true
+
+# ============================================================
+# 起始基线
+# ============================================================
+baseline:
+  checkpoint: "logs/opt_best/best.pt"  # 从当前 best 继续
+  resume_mode: "partial"
+
+# ============================================================
+# 回滚机制（创新失败时回滚到 best）
+# ============================================================
+rollback:
+  tolerance_rounds: 2  # 同一方向容忍轮数，超过则回滚 + 记失败库
+
+# ============================================================
+# 双知识库（失败库 + 成功库，跨 run 累积）
+# ============================================================
+knowledge:
+  file: "logs/opt_knowledge.json"
+
+# ============================================================
+# best 状态持久化
+# ============================================================
+best:
+  dir: "logs/opt_best"
+
+# ============================================================
+# 可修改模块白名单
+# ============================================================
+mutable_modules:
+  - path: "src/env/rsma_env.py"
+    scope: "reward_only"  # 仅奖励计算部分
+  - path: "src/training/lagrangian.py"
+    scope: "full"
+  - path: "src/training/ppo.py"
+    scope: "full"
+  - path: "src/training/main.py"
+    scope: "full"
+  - path: "src/config.py"
+    scope: "full"
+  - path: "src/models/actor_critic.py"
+    scope: "architecture_only"  # 仅架构层（注意力/FiLM/残差/LayerNorm），不改维度
+  - path: "src/models/meta_controller.py"
+    scope: "architecture_only"
+
+# ============================================================
+# 不可修改模块
+# ============================================================
+immutable_modules:
+  - "src/env/rsma_env.py:channel"
+  - "src/env/rsma_env.py:rate_calculation"
+  - "src/env/rsma_env.py:step_dynamics"
+  - "scripts/evaluate_snr_sweep.py"
+
+# ============================================================
+# Cloud Agents API 配置（替代 qodercli）
+# ============================================================
+cloud_agents:
+  base_url: "https://api.qoder.com/api/v1/cloud"
+  # Agent IDs（已创建）
+  coordinator_agent_id: "agent_00jxp3j8k1wqou60uysx"
+  analyst_agent_id: "agent_00jxoydkx8oowfkl57yx"
+  scout_agent_id: "agent_00jxoyea17uo00rhexme"
+  architect_agent_id: "agent_00jxoyetnx4hs48i99ya"
+  environment_id: "env_00juvv6ri5zb4cnu94em"
+  # 模型配置
+  model: "kmodel_latest"    # Kimi-K3（决策/分析/检索/架构，替代 Cantus）
+  effort: "high"            # Kimi-K3 支持 high/low/max
+  context_window: 1000000   # 1M tokens
+  # Session 策略
+  session_reuse: true       # 复用长 Session
+  context_compress_threshold: 800000  # 超过 800K tokens 时压缩
+  # 超时
+  response_timeout: 600     # SSE 流超时（秒）
+  # 保留
+  max_context_lines: 800
+  train_log_tail_lines: 50
+  history_rounds: 5         # 兼容（长 Session 下作用减小）
+
+# ============================================================
+# qodercli 代码施工配置（方案 X：Cloud Agents 出战略，qodercli 本地施工）
+# ============================================================
+qodercli:
+  command: "qodercli"
+  model: "Kimi-K2.7-Code"          # 代码专精模型（已实测支持 reasoning-effort）
+  fallback_model: "Qwen3.8-Max-Preview"  # 主力不可用时回退
+  reasoning_effort: "high"        # 高思考档：读懂现有架构 + 设计维度兼容改动 + 自测修复
+  self_repair_rounds: 3           # 自检自修最多轮数（写进工单要求）
+  timeout: 1500                   # 单次施工超时（含多轮自测），秒（从 900→加大，允许复杂方向完成）
+
+# ============================================================
+# 代码安全护栏（qodercli 自主施工后的 git diff 硬校验）
+# ============================================================
+code_guard:
+  # 白名单：git 改动文件（含新增文件）必须全部落在这些路径内，支持目录前缀
+  mutable_files:
+    - "src/env/rsma_env.py"
+    - "src/training/"            # 训练层整目录放开（含新增文件）
+    - "src/models/"             # 模型层整目录放开（含新增文件，维度不可变）
+    - "src/config.py"
+    - "src/optimization/"       # 优化器层放开
+    - "scripts/train.py"        # 训练入口放开
+    - "scripts/baselines/"      # 基线脚本目录放开
+  # 零容忍：改动碰到即整体回滚 + 记失败库（仅剩物理模型两件套）
+  forbidden_files:
+    - "src/env/channel.py"       # 信道物理模型，不可动
+    - "src/env/rate_calc.py"     # RSMA 速率计算，不可动
+  # 不可变路径清单：施工后、接受与提交之前对本轮实际改动文件做零容忍校验，
+  # 命中即中止本轮 + 回滚工作区 + 状态文件记录拒绝原因（immutable_rejections）
+  immutable_paths:
+    - "src/env/channel.py"              # 环境物理模型：信道
+    - "src/env/rate_calc.py"            # 环境物理模型：RSMA 速率计算
+    - "scripts/evaluate_snr_sweep.py"   # 评估脚本：指标口径不可变
+  # rsma_env.py 物理段语义检查关键词（diff 变动含这些即回滚）
+  # 已放宽：step 动力学/动作解析/观测构造允许改（要求维度不变）；
+  # 仅保留物理模型调用零容忍（信道/速率接口，改了实验不可比）
+  rsma_env_physical_markers:
+    - "self.rate_calc"
+    - "self.channel"
+
+# ============================================================
+# Git 配置
+# ============================================================
+git:
+  auto_commit: true
+  commit_prefix: "opt-loop"
+  # commit message 格式: opt-loop iter-N: delivery=X.XX queue=X.X EE_ratio=X.XX [mode]
+  # 提交前置门：commit 前运行语法检查 + 快速测试子集，任一失败则跳过本轮提交，
+  # 并在状态文件记录拦截原因（commit_gate_rejections）；不改变 commit 前缀与轮次记录格式
+  commit_gate:
+    enabled: true
+    syntax_dirs: ["src", "scripts"]   # 语法检查目录（python -m compileall）
+    tests:                            # 快速测试子集（当前全绿，合计约 4s；
+      - "tests/test_channel.py"       # 不含 test_env/test_plackett_luce/test_training：
+      - "tests/test_rate_calc.py"     # 这三个文件存在存量失败，纳入会拦截所有提交
+      - "tests/test_traffic.py"
+      - "tests/test_meta_controller.py"
+      - "tests/test_immutable_guard.py"
+    timeout: 300                      # 单项检查超时（秒）
+
+# ============================================================
+# 状态文件路径
+# ============================================================
+state:
+  file: "scripts/optimize_loop_state.json"
+  report: "logs/optimize_loop_report.md"
+  log: "logs/optimize_loop_run.log"

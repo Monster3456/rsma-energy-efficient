@@ -1,0 +1,1 @@
+"""v2 模型：Meta-Controller 升级版（per-bucket alpha 缩放）"""

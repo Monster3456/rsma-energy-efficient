@@ -2,6 +2,10 @@
 from dataclasses import dataclass, field
 import numpy as np
 
+# 时序历史窗口快照允许的逐用户特征名（语义映射见 rsma_env._get_observation）：
+# "h_gains"→h_gains_norm 块, "queue"→queue_norm 块, "power"→power_history 块
+OBS_HISTORY_ALLOWED_FEATURES: tuple = ("h_gains", "queue", "power")
+
 @dataclass
 class SystemConfig:
     """物理层系统参数"""
@@ -44,6 +48,13 @@ class SystemConfig:
     pilot_power: float = 1.0         # 导频发射功率 P_pilot
     epsilon_floor: float = 0.01      # 估计噪声下界（量化/硬件噪底）
     obs_include_csi_quality: bool = False  # 是否在 obs 中追加每用户估计不确定度（增加 K 维）
+
+    # 时序策略容量：历史窗口观测（默认关，obs_dim 与历史版本完全一致）
+    # window=H>0 时在 per-user 特征区末尾、global 尾之前，追加最近 H 个时隙的
+    # 逐用户特征快照（每个 lag 贡献 len(features) 个 K 维块，最旧在前），
+    # 使无状态 Worker 获得跨时隙时序信息；策略/act/buffer/ppo 均零语义改动。
+    obs_history_window: int = 0
+    obs_history_features: tuple = ("h_gains", "queue", "power")
 
     # 预编码 / 接收机方案
     # "rzf": 统一 MRT 发射 + MMSE-SIC 接收 (默认, 设计文档 2026-06-05)
@@ -103,6 +114,20 @@ class SystemConfig:
     dvq_cvar_alpha: float = 0.25       # CVaR 分位：惩罚 worst 25% 尾部用户
     dvq_warmup_episodes: int = 200
     dvq_z_max: float = 200.0
+
+    def __post_init__(self):
+        # 时序历史窗口配置校验（名称非法/窗口为负时尽早失败）
+        unknown = [f for f in self.obs_history_features
+                   if f not in OBS_HISTORY_ALLOWED_FEATURES]
+        if unknown:
+            raise ValueError(
+                f"obs_history_features 含未知特征 {unknown}，"
+                f"允许值: {list(OBS_HISTORY_ALLOWED_FEATURES)}"
+            )
+        if self.obs_history_window < 0:
+            raise ValueError(
+                f"obs_history_window 必须 >= 0，收到 {self.obs_history_window}"
+            )
 
 @dataclass
 class LyapunovConfig:

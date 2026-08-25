@@ -451,12 +451,26 @@ def train(config=None):
     )
     if use_attention:
         # P1: Self-Attention Worker（让 SNR/ε 全局信号通过 FiLM 注入避免 LN 稀释）
+        # 时序历史窗口开启时，env 在 per-user 特征区末尾追加了最近 H 槽的
+        # 逐用户特征快照，构造 Worker 的 d_user 相应扩展 H·F（d_global 仍为
+        # 3 维尾 time_ratio/snr/eps，n_global_inject=2 的 (snr,eps) 注入不变）
+        worker_d_user_base = int(getattr(config.ppo, "worker_d_user", 10))
+        hist_window = int(getattr(config.system, "obs_history_window", 0))
+        hist_feats = tuple(getattr(config.system, "obs_history_features", ()))
+        worker_d_user_eff = worker_d_user_base
+        if hist_window > 0:
+            worker_d_user_eff += hist_window * len(hist_feats)
+            print(
+                f"[Train] obs_history_window={hist_window}, "
+                f"features={list(hist_feats)}, "
+                f"worker_d_user: {worker_d_user_base} -> {worker_d_user_eff}"
+            )
         worker_ac = ActorCriticAttn(
             obs_dim=obs_dim,
             action_dim=worker_action_dim,
             K=K,
-            d_user=getattr(config.ppo, "worker_d_user", 10),
-            d_global=obs_dim - K * getattr(config.ppo, "worker_d_user", 10),
+            d_user=worker_d_user_eff,
+            d_global=obs_dim - K * worker_d_user_eff,
             hidden_dim=getattr(config.ppo, "worker_attn_hidden", 128),
             n_heads=getattr(config.ppo, "worker_attn_heads", 4),
             n_attn_layers=getattr(config.ppo, "worker_attn_layers", 2),
@@ -1805,6 +1819,8 @@ def _build_config_from_args() -> Config:
     parser.add_argument("--use_attention", type=lambda v: v.lower() in ("1", "true", "yes"),
                         default=None,
                         help="Worker 改用 Self-Attention + FiLM (替代 MLP)")
+    parser.add_argument("--obs_history_window", type=int, default=None,
+                        help="时序历史窗口长度 H (覆盖 system.obs_history_window, 0=关闭)")
     args = parser.parse_args()
 
     cfg = Config()
@@ -1828,6 +1844,8 @@ def _build_config_from_args() -> Config:
         cfg.hierarchical.T_s = args.T_s
     if args.use_attention is not None:
         cfg.ppo.use_attention = args.use_attention
+    if args.obs_history_window is not None:
+        cfg.system.obs_history_window = args.obs_history_window
     return cfg
 
 

@@ -6,13 +6,14 @@
 """
 from __future__ import annotations
 
+from collections import deque
 from typing import Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from src.config import Config
+from src.config import OBS_HISTORY_ALLOWED_FEATURES, Config
 from src.env.beamforming import BeamformingDesigner
 from src.env.channel import (
     ChannelGenerator,
@@ -134,6 +135,33 @@ class RSMAEnergyEnv(gym.Env):
             getattr(sys_cfg, "obs_include_csi_quality", False)
         )
 
+        # ---- 时序策略容量：历史窗口观测（默认关，obs_dim 不变）----
+        # window=H>0 时在 per-user 特征区末尾追加最近 H 个时隙的逐用户特征
+        # 快照（最旧在前），策略保持无状态。窗口在 reset() 清空，由首次
+        # _get_observation 用 reset 时刻快照预填充（避免零瞬态）。
+        self.obs_history_window: int = int(getattr(sys_cfg, "obs_history_window", 0))
+        self.obs_history_features: tuple = tuple(
+            getattr(sys_cfg, "obs_history_features", OBS_HISTORY_ALLOWED_FEATURES)
+        )
+        # 构造后修改 config 属性的常见用法走不到 SystemConfig.__post_init__，
+        # 在消费端（env）入口再次校验
+        unknown_feats = [
+            f for f in self.obs_history_features
+            if f not in OBS_HISTORY_ALLOWED_FEATURES
+        ]
+        if unknown_feats:
+            raise ValueError(
+                f"obs_history_features 含未知特征 {unknown_feats}，"
+                f"允许值: {list(OBS_HISTORY_ALLOWED_FEATURES)}"
+            )
+        if self.obs_history_window < 0:
+            raise ValueError(
+                f"obs_history_window 必须 >= 0，收到 {self.obs_history_window}"
+            )
+        self._obs_history: deque = deque(
+            maxlen=max(self.obs_history_window, 1)
+        )
+
         # ---- v13: 异构 QoS 配置 (必须在 obs_dim 计算之前初始化) ----
         self.enable_hetero_qos = bool(getattr(sys_cfg, 'enable_hetero_qos', False))
         self.qos_classes = int(getattr(sys_cfg, 'qos_classes', 3))
@@ -155,6 +183,10 @@ class RSMAEnergyEnv(gym.Env):
             self._obs_dim += 2 * self.K
         if self.obs_include_csi_quality:
             self._obs_dim += self.K
+        # 时序历史窗口: 每个追加 lag 快照贡献 len(features) 个 K 维块
+        # （拼接在既有 per-user 特征块之后、global 尾之前）
+        if self.obs_history_window > 0:
+            self._obs_dim += self.obs_history_window * len(self.obs_history_features) * self.K
 
         # 分层架构支持
         self.hierarchical_enabled: bool = getattr(
@@ -476,6 +508,33 @@ class RSMAEnergyEnv(gym.Env):
             obs_blocks.append(qos_lambda_feat)    # K维: 到达率负载
             obs_blocks.append(qos_priority_feat)  # K维: 服务优先级
 
+        # 时序历史窗口：追加最近 H 个时隙的逐用户特征快照（最旧在前），
+        # 每个 lag 贡献 len(features) 个 K 维块（按配置的特征顺序），
+        # 位于既有 per-user 特征块之后、global 尾 (time_ratio, snr, eps) 之前。
+        if self.obs_history_window > 0:
+            hist_feat_blocks = {
+                "h_gains": h_gains_norm,
+                "queue": queue_norm,
+                "power": power_history,
+            }
+            snapshot = np.concatenate(
+                [np.asarray(hist_feat_blocks[f], dtype=np.float64)
+                 for f in self.obs_history_features]
+            )
+            if len(self._obs_history) == 0:
+                # reset 后首次调用：用 reset 时刻快照预填充窗口（避免零瞬态），
+                # 本槽快照已在窗口内，无需再追加
+                self._obs_history.extend(
+                    snapshot.copy() for _ in range(self.obs_history_window)
+                )
+                history_snapshots = list(self._obs_history)
+            else:
+                # 先取出 t-H..t-1 的历史区，再把当前槽快照推入窗口
+                history_snapshots = list(self._obs_history)
+                self._obs_history.append(snapshot)
+            for snap in history_snapshots:
+                obs_blocks.append(snap)  # (len(features)*K,)：lag 内按特征顺序
+
         obs_blocks.extend([
             time_ratio,                             # 1: 时间进度
             np.array([snr_norm, eps_norm], dtype=np.float64),  # 2: 信道质量信号
@@ -592,6 +651,8 @@ class RSMAEnergyEnv(gym.Env):
         self.step_in_episode = 0
         self._prev_power = np.zeros(self.K, dtype=np.float64)
         self._prev_queue = None
+        # 时序历史窗口清空：首次 _get_observation 用 reset 时刻快照预填充
+        self._obs_history.clear()
         self._reset_meta_stats()
 
         # 分层 PPO 追踪变量重置

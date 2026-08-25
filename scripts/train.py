@@ -22,6 +22,8 @@ if __name__ == "__main__":
     parser.add_argument('--rollout_steps', type=int, default=2048,
                         help='Steps per rollout')
     parser.add_argument('--batch_size', type=int, default=64, help='Mini-batch size')
+    parser.add_argument('--obs_history_window', type=int, default=None,
+                        help='时序历史观测窗口长度 H（覆盖 system.obs_history_window，默认 0=关闭）')
 
     # Task#11 消融实验标志
     parser.add_argument('--disable-split', action='store_true',
@@ -157,6 +159,8 @@ if __name__ == "__main__":
     config.device = args.device
     config.ppo.rollout_steps = args.rollout_steps
     config.ppo.batch_size = args.batch_size
+    if args.obs_history_window is not None:
+        config.system.obs_history_window = args.obs_history_window
 
     # 注入消融标志
     config.ablation.disable_split = args.disable_split

@@ -25,6 +25,8 @@ scripts/.optimize_loop_stop
 # AI 工具配置（非项目代码）
 .claude/
 .cursor/
+.qoder/
+.idea/
 
 # 嵌入式独立 git 仓库（非本项目代码，git add -A 会报错）
 cloud-agents-console/

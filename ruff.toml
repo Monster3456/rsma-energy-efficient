@@ -1,0 +1,19 @@
+# 格式化配置：line-length 对齐现有代码风格（仓库最长 156，仅 19 行超 120）
+# quote 保留原样，最小化对物理代码的 diff 噪声
+line-length = 120
+target-version = "py310"
+
+# 不可变物理模块绝不允许格式化：
+# channel.py / rate_calc.py / evaluate_snr_sweep.py 在 code_guard.immutable_paths 中零容忍，
+# rsma_env.py 的物理调用段含 self.channel / self.rate_calc 标记，diff 命中即回滚整轮。
+# force-exclude 使显式传入的文件也遵循 exclude。
+force-exclude = true
+exclude = [
+    "src/env/channel.py",
+    "src/env/rate_calc.py",
+    "src/env/rsma_env.py",
+    "scripts/evaluate_snr_sweep.py",
+]
+
+[format]
+quote-style = "preserve"

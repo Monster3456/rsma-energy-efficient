@@ -58,9 +58,28 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 可修改白名单与修改范围见该配置文件的 `mutable_modules` 与 `code_guard.mutable_files`。
 
+## 常用命令（Windows 本机；Makefile 在本机不可用）
+
+Makefile 硬性要求 Python 3.14 且使用 Unix venv 路径（`.venv/bin/python`），而本机 venv 为 Windows 版 Python 3.10 — `make` 所有目标在本机失败。直接用 venv 解释器（Git Bash 下写正斜杠）：
+
+- 全量测试：`.venv/Scripts/python.exe -m pytest -q tests/`（218 用例，约 5 秒，纯 CPU，当前全绿）
+- 快速门禁：`.venv/Scripts/python.exe -m pytest -m fast -q tests/`（216 个 fast 用例；optimize-loop 每轮训练的前置门禁）
+- 训练入口：`python -m src.training.main --exp_name <名称> --total_episodes N --device cpu --csi_mode imperfect`
+- 冒烟验证：`PYTHONPATH=. .venv/Scripts/python.exe scripts/train.py --smoke --exp_name <名称>`（1 episode 快速跑通训练管线）
+- 评估：`python scripts/evaluate_snr_sweep.py --n_episodes 50 --checkpoint <ckpt>`（自带相对路径修复，可直接运行）
+
+**路径陷阱**：`scripts/train.py:4` 硬编码作者 macOS 绝对路径，直接运行报 `ModuleNotFoundError: No module named 'src'`，必须加 `PYTHONPATH=.` 前缀；`experiments/v2/` 各入口同样绑定 Mac 路径，本机不可直接运行。
+
+**测试纪律**：任何代码改动后先跑快速门禁再继续（全量套件实测 5 秒内完成，无借口跳过）。
+
+## 格式化与 Lint
+
+- 用 ruff（配置见 `ruff.toml`：line-length 120、quote 保留、`force-exclude`）：`.venv/Scripts/python.exe -m ruff format <file>` / `ruff check <file>`
+- `channel.py`、`rate_calc.py`、`rsma_env.py`、`scripts/evaluate_snr_sweep.py` 已被 force-exclude 豁免——**任何情况下都不要重新格式化它们**，纯格式 diff 也会触发 optimize-loop code_guard 的 immutable 拦截并回滚整轮
+
 ## 深链
 
 - [MODEL.md](MODEL.md) — 系统完整数学建模（优化变量、约束、分层 RL 算法）
 - [HANDOFF_LYAPUNOV_DRL.md](HANDOFF_LYAPUNOV_DRL.md) — Lyapunov 引导 DRL 实施交接
 - [HANDOFF_v13m_fix.md](HANDOFF_v13m_fix.md) — LDPTRLQ 奖励改造交接（含当前基线状态）
-- [CLAUDE.md](CLAUDE.md) — 分层架构与常用命令补充说明
+- [CLAUDE.md](CLAUDE.md) — 分层架构与常用命令补充说明（注意过时点：称 K=16/obs=161，实际代码为 K=24、obs=11K+3；其引用的部分根目录脚本在本仓库不存在。冲突时以代码与 `scripts/optimize_loop_config.yaml` 为准）

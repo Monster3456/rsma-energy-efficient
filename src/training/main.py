@@ -20,6 +20,7 @@ from src.models.meta_controller import (
     MetaRolloutBuffer,
 )
 from src.optimization.meta_reward import compute_meta_reward
+from src.optimization.solver_expert import SolverExpert
 from src.training.buffer import RolloutBuffer
 from src.training.lagrangian import DeliveryConstraint, DeliveryVirtualQueue
 from src.training.ppo import PPOTrainer
@@ -418,6 +419,59 @@ def _hek_collect_expert(env: RSMAEnergyEnv, config, n_episodes: int):
     )
 
 
+def _solver_expert_collect(env: RSMAEnergyEnv, config, meta_ac, device,
+                           n_episodes: int, n_steps: int = 25, lr: float = 0.1):
+    """Solver-Expert: 单槽 DGLCR surrogate 精修专家在真实 env 收集演示。
+
+    每时隙 expert.solve() 以冻结对偶变量在线精修 p_logits 并从 order 候选
+    集择优，产生 (obs, 3K 连续动作, K 优先级) 三元组（order 为 env 约定的
+    user→priority 值，经 main 的 4K 组装约定等价于 PL 头的 BC 目标排列）。
+    与 HEK 规则专家不同，演示来自可微 surrogate 的逐槽最优解。
+
+    Meta 决策按训练同款节奏运行（episode 起点 + T_s 段边界，transition
+    丢弃），使 BC 数据覆盖真实 split/group/α 分布；worker 网络与
+    其参数不被触碰。
+
+    Returns:
+        (expert_obs, expert_act, expert_orders):
+        (N, obs_dim) / (N, 3K) float32 与 (N, K) int64 数组。
+    """
+    K = env.K
+    T_s = int(getattr(config.hierarchical, "T_s", 20))
+    max_steps_per_ep = int(getattr(config.system, "T", 200))
+    expert = SolverExpert(env, n_steps=n_steps, lr=lr)
+    expert_obs: list = []
+    expert_act: list = []
+    expert_orders: list = []
+
+    for _ in range(int(n_episodes)):
+        obs, _ = env.reset()
+        # episode 起点注入 Meta split/groups（与主循环同款，transition 丢弃）
+        _meta_decide(meta_ac, env, device)
+        for _ in range(max_steps_per_ep):
+            result = expert.solve(env)
+            expert_obs.append(np.asarray(obs, dtype=np.float32).copy())
+            expert_act.append(result["cont_action"].astype(np.float32))
+            expert_orders.append(np.asarray(result["order"], dtype=np.int64))
+            obs, _, terminated, truncated, _ = env.step(result["action"])
+            if terminated or truncated:
+                break
+            if env.step_in_episode % T_s == 0:
+                _meta_decide(meta_ac, env, device)
+
+    if not expert_obs:
+        return (
+            np.zeros((0, env.obs_dim), dtype=np.float32),
+            np.zeros((0, 3 * K), dtype=np.float32),
+            np.zeros((0, K), dtype=np.int64),
+        )
+    return (
+        np.stack(expert_obs).astype(np.float32),
+        np.stack(expert_act).astype(np.float32),
+        np.stack(expert_orders).astype(np.int64),
+    )
+
+
 def train(config=None):
     """双层 PPO 训练主循环。
 
@@ -485,7 +539,21 @@ def train(config=None):
             bucket_snr_max=getattr(config.ppo, "bucket_snr_max", 35.0),
             use_c3po_cost_head=c3po_enabled,
             c3po_n_points=getattr(config.constraint, "c3po_n_points", 7) if c3po_enabled else 7,
+            backpressure_beta=getattr(config.ppo, "backpressure_beta", 0.0),
+            backpressure_mode=getattr(config.ppo, "backpressure_mode", "queue"),
         ).to(device)
+        _bp_modes = ['queue', 'queue_channel', 'mw_residual', 'mw_gated']
+        if int(worker_ac.backpressure_mode_buf) == 3:
+            print("[Train] Worker backpressure prior ON: mode=mw_gated "
+                  "(闭式 max-weight 基座 × 可学习负载门 g(s) + head 残差, "
+                  f"初始 g={torch.sigmoid(worker_ac.mw_gate.bias).item():.3f})")
+        elif int(worker_ac.backpressure_mode_buf) == 2:
+            print("[Train] Worker backpressure prior ON: mode=mw_residual "
+                  "(闭式 max-weight 基座 + head 残差, beta 不适用)")
+        elif float(worker_ac.backpressure_beta_buf) > 0.0:
+            print(f"[Train] Worker backpressure prior ON: mode="
+                  f"{_bp_modes[int(worker_ac.backpressure_mode_buf)]}, "
+                  f"beta={float(worker_ac.backpressure_beta_buf):.3f}")
         print(f"[Train] Worker = Self-Attention (hidden={getattr(config.ppo, 'worker_attn_hidden', 128)}, "
               f"heads={getattr(config.ppo, 'worker_attn_heads', 4)}, "
               f"layers={getattr(config.ppo, 'worker_attn_layers', 2)})")
@@ -1094,6 +1162,125 @@ def train(config=None):
                 constraint_cfg.use_load_curriculum = hek_orig_lc
             if lc_on:
                 _apply_lc_scale()
+            obs, _ = env.reset()
+            _set_worker_bucket(worker_ac, env)
+            prev_meta_obs, prev_split, prev_group_ids, prev_log_prob, prev_value = (
+                _meta_decide(meta_ac, env, device)
+            )
+            meta_stats = _empty_meta_stats()
+
+    # -------------------- Solver-Expert Iteration: 单槽 DGLCR 精修专家热启动 --------------------
+    # Expert-Iteration（ExIt/AlphaZero 模式，初始化层干预）：可微 surrogate 在
+    # 真实 env 逐时隙在线求解（p_logits Adam 精修 + order 候选择优），演示经
+    # bc_pretrain 联合训练连续头 + PL 排序头，再以衰减锚定微调。solver_expert_
+    # enabled=False 时整段跳过，行为与现状完全一致。
+    # resume / partial_resume 时跳过（初始化已由 checkpoint 给定，BC 会覆盖）。
+    # 需 Worker 为 PL 模式（BC order 目标依赖 PL 头）；与 HEK 互斥（共用 BC 通道）。
+    se_on = bool(
+        constraint_cfg is not None
+        and getattr(constraint_cfg, 'solver_expert_enabled', False)
+        and not hek_on
+        and not resume_ckpt_path
+        and not partial_ckpt_path
+    )
+    if se_on and not bool(getattr(worker_ac, "use_plackett_luce", False)):
+        print("[SolverExpert] disabled: worker is not in Plackett-Luce mode")
+        se_on = False
+    if se_on and bool(getattr(worker_ac, "use_bucket_experts", False)):
+        # BC/anchor 通道无逐样本桶路由（evaluate_actions bucket_indices=None
+        # 时全部样本落入单一 active head），桶专家组合下演示会污染单头
+        print("[SolverExpert] disabled: incompatible with bucket experts "
+              "(use --no-bucket-experts)")
+        se_on = False
+    if se_on:
+        try:
+            worker_trainer.hek_enabled = True
+            worker_trainer.hek_bc_epochs = int(
+                getattr(constraint_cfg, 'solver_expert_bc_epochs', 150))
+            worker_trainer.hek_bc_lr = float(
+                getattr(constraint_cfg, 'solver_expert_bc_lr', 3e-4))
+            worker_trainer.hek_anchor_updates = int(
+                getattr(constraint_cfg, 'solver_expert_anchor_updates', 40))
+            worker_trainer.hek_anchor_coef = float(
+                getattr(constraint_cfg, 'solver_expert_anchor_coef', 0.2))
+            worker_trainer.hek_anchor_decay = float(
+                getattr(constraint_cfg, 'solver_expert_anchor_decay', 0.95))
+
+            # 评估口径收集：CuRLTraC stage-0（snr_min=5dB）覆盖不到 0-5dB 缺口区，
+            # 临时切到课程终态/eval 配置（snr[-5,35]、load[0.75,1.3]）收集，
+            # 结束后恢复当前课程档位，主训练不受影响
+            se_saved_env = (
+                env.snr_min_db, env.snr_max_db,
+                env.load_ratio_min, env.load_ratio_max,
+            )
+            env.snr_min_db = float(getattr(
+                config.ppo, 'curriculum_snr_min_end', config.system.snr_min_db))
+            env.snr_max_db = float(config.system.snr_max_db)
+            env.load_ratio_min = float(config.system.load_ratio_min)
+            env.load_ratio_max = float(getattr(
+                config.ppo, 'curriculum_load_ratio_max_end',
+                config.system.load_ratio_max))
+
+            t0 = time.time()
+            exp_obs, exp_act, exp_orders = _solver_expert_collect(
+                env, config, meta_ac, device,
+                n_episodes=int(getattr(constraint_cfg, 'solver_expert_episodes', 6)),
+                n_steps=int(getattr(constraint_cfg, 'solver_expert_steps', 25)),
+                lr=float(getattr(constraint_cfg, 'solver_expert_lr', 0.1)),
+            )
+            t_collect = time.time() - t0
+            (
+                env.snr_min_db, env.snr_max_db,
+                env.load_ratio_min, env.load_ratio_max,
+            ) = se_saved_env
+            bc_info = worker_trainer.bc_pretrain(exp_obs, exp_act, orders_np=exp_orders)
+            # 纯 BC 检查点：专家迭代对照组（BC 后、PPO 微调前的策略快照）
+            bc_ckpt_path = os.path.join(checkpoint_dir, "bc_init.pt")
+            torch.save(
+                {
+                    "episode": 0,
+                    "total_steps": 0,
+                    "update_count": 0,
+                    "meta_update_count": 0,
+                    "worker_state_dict": worker_ac.state_dict(),
+                    "meta_state_dict": meta_ac.state_dict(),
+                    "worker_optimizer": worker_trainer.optimizer.state_dict(),
+                    "meta_optimizer": meta_trainer.optimizer.state_dict(),
+                    "config": vars(config.ppo),
+                    "bc_stage": True,
+                },
+                bc_ckpt_path,
+            )
+            print(
+                f"[SolverExpert] demos={exp_obs.shape[0]} steps "
+                f"({t_collect:.0f}s collect) | "
+                f"BC pretrain: loss={bc_info['bc_loss']:.4f} "
+                f"epochs={bc_info['bc_epochs']} (joint cont+PL) | "
+                f"anchor: coef={worker_trainer.hek_anchor_coef} "
+                f"decay={worker_trainer.hek_anchor_decay} "
+                f"updates={worker_trainer.hek_anchor_updates}"
+            )
+            # 演示收集打乱了 env 状态：重新 reset 并重做首段 Meta 决策，
+            # 保证主循环从干净初始状态起步
+            obs, _ = env.reset()
+            _set_worker_bucket(worker_ac, env)
+            prev_meta_obs, prev_split, prev_group_ids, prev_log_prob, prev_value = (
+                _meta_decide(meta_ac, env, device)
+            )
+            meta_stats = _empty_meta_stats()
+        except Exception as se_err:
+            print(f"[SolverExpert] disabled due to error: {se_err}")
+            worker_trainer.hek_enabled = False
+            worker_trainer.hek_obs = None
+            worker_trainer.hek_act = None
+            worker_trainer.hek_orders = None
+            try:
+                (
+                    env.snr_min_db, env.snr_max_db,
+                    env.load_ratio_min, env.load_ratio_max,
+                ) = se_saved_env
+            except NameError:
+                pass  # 收集前失败（超参注入段），env 未被改写
             obs, _ = env.reset()
             _set_worker_bucket(worker_ac, env)
             prev_meta_obs, prev_split, prev_group_ids, prev_log_prob, prev_value = (

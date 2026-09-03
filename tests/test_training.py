@@ -432,6 +432,103 @@ class TestPPOTrainerPL:
         assert np.isfinite(info['entropy'])
 
 
+@pytest.mark.fast
+class TestBCPretrainPL:
+    """Solver-Expert BC 联合训练通道（连续头 + PL 排序头 + 锚定）"""
+
+    K = 16
+
+    def _make_trainer(self):
+        config = PPOConfig()
+        ac = ActorCritic(obs_dim=161, action_dim=64, hidden_dim=64, n_layers=2,
+                         use_plackett_luce=True)
+        trainer = PPOTrainer(ac, config)
+        trainer.hek_bc_epochs = 5
+        trainer.hek_bc_lr = 1e-3
+        return trainer
+
+    def _make_demos(self, n):
+        rng = np.random.RandomState(0)
+        obs = rng.randn(n, 161).astype(np.float32)
+        act = np.clip(rng.randn(n, 3 * self.K) * 0.3, -0.9, 0.9).astype(np.float32)
+        orders = np.stack(
+            [rng.permutation(self.K) for _ in range(n)]).astype(np.int64)
+        return obs, act, orders
+
+    def test_bc_pretrain_pl_joint(self):
+        """传入 orders 时联合训练：缓存 hek_orders 且 demo 似然上升"""
+        trainer = self._make_trainer()
+        obs, act, orders = self._make_demos(32)
+
+        obs_t = torch.from_numpy(obs)
+        act_t = torch.from_numpy(act)
+        orders_t = torch.from_numpy(orders)
+        with torch.no_grad():
+            lp_before, _, _, _ = trainer.ac.evaluate_actions(obs_t, act_t, orders_t)
+        info = trainer.bc_pretrain(obs, act, orders_np=orders)
+        with torch.no_grad():
+            lp_after, _, _, _ = trainer.ac.evaluate_actions(obs_t, act_t, orders_t)
+
+        assert np.isfinite(info['bc_loss'])
+        assert trainer.hek_orders is not None
+        assert trainer.hek_orders.shape == (32, self.K)
+        assert trainer.hek_obs.shape == (32, 161)
+        assert float(lp_after.mean()) > float(lp_before.mean())
+
+    def test_bc_pretrain_without_orders_legacy(self):
+        """orders_np=None 保持旧路径：不缓存 orders，似然同样上升"""
+        trainer = self._make_trainer()
+        obs, act, _ = self._make_demos(16)
+
+        obs_t = torch.from_numpy(obs)
+        act_t = torch.from_numpy(act)
+        with torch.no_grad():
+            _, _, _, lp_before = trainer.ac.evaluate_actions(obs_t, act_t, None)
+        info = trainer.bc_pretrain(obs, act)
+        with torch.no_grad():
+            _, _, _, lp_after = trainer.ac.evaluate_actions(obs_t, act_t, None)
+
+        assert np.isfinite(info['bc_loss'])
+        assert trainer.hek_orders is None
+        assert float(lp_after.mean()) > float(lp_before.mean())
+
+    def test_anchor_loss_with_orders(self):
+        """update() 锚定路径：hek_orders 生效时 hek_anchor_loss 有限且系数>0"""
+        trainer = self._make_trainer()
+        obs, act, orders = self._make_demos(16)
+        trainer.bc_pretrain(obs, act, orders_np=orders)
+        trainer.hek_enabled = True
+        trainer.hek_anchor_updates = 3
+        trainer.hek_anchor_coef = 0.2
+
+        config = PPOConfig()
+        config.n_epochs = 1
+        config.batch_size = 16
+        ac = trainer.ac
+        buffer = RolloutBuffer(
+            rollout_steps=16, obs_dim=161, action_dim=48,
+            gamma=config.gamma, gae_lambda=config.gae_lambda,
+            decoding_order_dim=self.K
+        )
+        for _ in range(16):
+            o = torch.randn(161)
+            with torch.no_grad():
+                action_cont, dec_order, log_prob, value, cont_log_prob = ac.act(o)
+            buffer.add(
+                o.numpy(), action_cont.numpy(),
+                reward=float(np.random.randn()), value=value.item(),
+                log_prob=log_prob.item(), done=False,
+                decoding_order=dec_order.numpy(),
+                cont_log_prob=cont_log_prob.item(),
+            )
+        buffer.compute_returns_and_advantages(last_value=0.0)
+
+        info = trainer.update(buffer)
+        assert np.isfinite(info['hek_anchor_loss'])
+        assert info['hek_coef'] > 0.0
+        assert np.isfinite(info['policy_loss'])
+
+
 # ============================================================
 # Integration Test: Mini Training Loop
 # ============================================================

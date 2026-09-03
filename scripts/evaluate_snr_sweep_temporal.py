@@ -45,11 +45,25 @@ DEFAULT_WINDOW = 4
 DEFAULT_FEATURES = "h_gains,queue,power"
 
 
-def make_temporal_config_cls(window: int, features: tuple):
+def make_temporal_config_cls(window: int, features: tuple, power_free: bool = False,
+                             n_r: int | None = None, fixed_lambda: float | None = None):
     """构造打补丁的 Config 子类。
 
     子配置（SystemConfig/PPOConfig 等）是 dataclass，实例化后在实例上
     mutate 属性即可；不要改 dataclass 类级默认值（那会污染所有 Config 用户）。
+
+    Args:
+        power_free: True 时同时关闭 use_softmax_power_share（训练用了
+            --no-softmax-power-share 的检查点必须配套，否则评估环境会把
+            p 块重新解释为 softmax 份额、总功率被钉回 ~24W）。
+        n_r: 非空时覆盖 system.N_r（训练用了 --n_r 的检查点必须配套，
+            否则评估环境按 N_r=16 重建信道维度不匹配）。注意 N_r 变化
+            会同步改变 SDMA 基线，得分与默认口径不可横比。
+        fixed_lambda: 非空时关闭 adaptive_lambda 并把 system.lambda_rate
+            钉为该值 — 固定外生流量口径（文献惯例：到达为外生固定过程，
+            不随信道容量自缩放）。物理层/参数改进在此口径下才会在
+            delivery/queue 上可见；注意检查点是在自适应 λ 下训练的，
+            结果属分布外泛化诊断，须如实披露。
 
     Returns:
         (TemporalConfig, worker_d_user_eff): 子类与扩展后的 per-user 特征维
@@ -64,6 +78,13 @@ def make_temporal_config_cls(window: int, features: tuple):
             self.system.obs_history_window = int(window)
             self.system.obs_history_features = tuple(features)
             self.ppo.worker_d_user = int(d_user_eff)
+            if power_free:
+                self.system.use_softmax_power_share = False
+            if n_r is not None:
+                self.system.N_r = int(n_r)
+            if fixed_lambda is not None:
+                self.system.adaptive_lambda = False
+                self.system.lambda_rate = float(fixed_lambda)
 
     return TemporalConfig, d_user_eff
 
@@ -164,22 +185,56 @@ def main():
         default=DEFAULT_FEATURES,
         help=(f"逗号分隔的历史特征名，须与训练一致（默认 '{DEFAULT_FEATURES}'，允许值 h_gains/queue/power）"),
     )
+    parser.add_argument(
+        "--no-softmax-power-share",
+        action="store_true",
+        help="训练用了 --no-softmax-power-share 的检查点须加此 flag（评估环境同步关闭 softmax 功率份额，p 块按每用户绝对功率解释）",
+    )
+    parser.add_argument(
+        "--n_r",
+        type=int,
+        default=None,
+        help="训练用了 --n_r 的检查点须加此参数（评估环境同步覆盖 system.N_r）；注意 N_r 变化会同步改变 SDMA 基线，得分与默认口径不可横比",
+    )
+    parser.add_argument(
+        "--fixed_lambda",
+        type=float,
+        default=None,
+        help=(
+            "固定外生流量口径：关闭 adaptive_lambda 并把 lambda_rate 钉为该值 "
+            "（文献惯例，到达不随容量自缩放）。与默认口径（λ∝容量）不可横比；"
+            "自适应 λ 下训练的检查点在此口径属分布外泛化诊断"
+        ),
+    )
     wrapper_args, forwarded = parser.parse_known_args()
 
     if wrapper_args.obs_history_window < 1:
         parser.error("--obs_history_window 必须 >= 1（非时序检查点请直接运行 scripts/evaluate_snr_sweep.py）")
+    if wrapper_args.n_r is not None and wrapper_args.n_r < 1:
+        parser.error(f"--n_r 必须 >= 1，got {wrapper_args.n_r}")
+    if wrapper_args.fixed_lambda is not None and wrapper_args.fixed_lambda <= 0:
+        parser.error(f"--fixed_lambda 必须 > 0，got {wrapper_args.fixed_lambda}")
     try:
         features = parse_features(wrapper_args.obs_history_features)
     except ValueError as e:
         parser.error(str(e))
 
-    temporal_cls, d_user_eff = make_temporal_config_cls(wrapper_args.obs_history_window, features)
+    temporal_cls, d_user_eff = make_temporal_config_cls(
+        wrapper_args.obs_history_window, features,
+        power_free=wrapper_args.no_softmax_power_share,
+        n_r=wrapper_args.n_r,
+        fixed_lambda=wrapper_args.fixed_lambda,
+    )
     base_d_user = d_user_eff - wrapper_args.obs_history_window * len(features)
     print(
         f"[TEMPORAL-EVAL] obs_history_window={wrapper_args.obs_history_window}, "
         f"features={list(features)} -> "
         f"worker_d_user: {base_d_user} -> {d_user_eff} "
-        f"(user_embed 输入维 {d_user_eff + 2})",
+        f"(user_embed 输入维 {d_user_eff + 2})"
+        + (" | power_free: use_softmax_power_share=False" if wrapper_args.no_softmax_power_share else "")
+        + (f" | N_r={wrapper_args.n_r}" if wrapper_args.n_r is not None else "")
+        + (f" | fixed_lambda={wrapper_args.fixed_lambda:g} (adaptive_lambda=False, 固定外生流量口径)"
+           if wrapper_args.fixed_lambda is not None else ""),
         flush=True,
     )
 

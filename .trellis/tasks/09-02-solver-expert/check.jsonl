@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/09-02-solver-expert/research/solver-expert-design.md", "reason": "验收对照：一致性测试容差、surrogate精确镜像、默认off零回归、专家诊断门槛"}
+{"file": ".trellis/spec/backend/eval-compatibility.md", "reason": "评估口径兼容约定"}

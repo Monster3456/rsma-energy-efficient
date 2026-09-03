@@ -101,6 +101,7 @@ class PPOTrainer:
         self.hek_enabled = False
         self.hek_obs = None
         self.hek_act = None
+        self.hek_orders = None
         self._hek_updates = 0
         self.hek_bc_epochs = 150
         self.hek_bc_lr = 3e-4
@@ -217,21 +218,29 @@ class PPOTrainer:
         cost_adv = (cost_adv - cost_adv.mean()) / (cost_adv.std() + 1e-8)
         return cost_adv.astype(np.float32), cost_returns.astype(np.float32)
 
-    def bc_pretrain(self, obs_np, act_np) -> dict:
-        """HEK-Lite: 专家演示行为克隆预训练（仅 actor + log_std 参数）。
+    def bc_pretrain(self, obs_np, act_np, orders_np=None) -> dict:
+        """HEK-Lite / Solver-Expert: 专家演示行为克隆预训练。
 
-        用独立 Adam(lr=hek_bc_lr) 对演示 (obs, act) 做 hek_bc_epochs 轮最大
-        似然训练：loss = -cont_log_prob.mean()（decoding_orders=None 只取
-        连续动作通道，不动 PL 排序头）。训练后 actor 落在高功率/高交付盆地
-        附近；演示数据缓存为 self.hek_obs/hek_act 供 update() 衰减锚定。
+        用独立 Adam(lr=hek_bc_lr) 对演示 (obs, act[, orders]) 做 hek_bc_epochs
+        轮最大似然训练：orders_np=None 时 loss = -cont_log_prob.mean()（不动
+        PL 排序头）；传入 (N,K) rank-value 解码顺序时 loss = -total_log_prob
+        （连续 + PL 头联合训练，env 侧 4K 动作组装约定下 rank-value 即 PL
+        排列目标）。训练后 actor 落在专家盆地附近；演示数据缓存为
+        self.hek_obs/hek_act/hek_orders 供 update() 衰减锚定。
         """
         device = next(self.ac.parameters()).device
         obs_t = torch.as_tensor(np.asarray(obs_np, dtype=np.float32), device=device)
         act_t = torch.as_tensor(
             np.asarray(act_np, dtype=np.float32), device=device
         ).clamp(-0.999, 0.999)  # atanh 定义域保护
+        if orders_np is not None:
+            orders_t = torch.as_tensor(
+                np.asarray(orders_np, dtype=np.int64), device=device)
+        else:
+            orders_t = None
         self.hek_obs = obs_t
         self.hek_act = act_t
+        self.hek_orders = orders_t
         self._hek_updates = 0
 
         n = int(obs_t.shape[0])
@@ -250,10 +259,12 @@ class PPOTrainer:
             perm = torch.randperm(n, device=device)
             for start in range(0, n, bs):
                 idx = perm[start:start + bs]
-                _, _, _, cont_log_prob = self.ac.evaluate_actions(
-                    obs_t[idx], act_t[idx], None
+                log_prob, _, _, cont_log_prob = self.ac.evaluate_actions(
+                    obs_t[idx], act_t[idx],
+                    orders_t[idx] if orders_t is not None else None
                 )
-                loss = -cont_log_prob.mean()
+                loss = -log_prob.mean() if orders_t is not None \
+                    else -cont_log_prob.mean()
                 if torch.isnan(loss) or torch.isinf(loss):
                     continue
                 opt.zero_grad()
@@ -662,10 +673,14 @@ class PPOTrainer:
                             hidx = torch.randint(
                                 0, n_hek, (obs.shape[0],), device=self.hek_obs.device
                             )
-                            _, _, _, h_cont_log_prob = self.ac.evaluate_actions(
-                                self.hek_obs[hidx], self.hek_act[hidx], None
+                            h_orders = None
+                            if getattr(self, "hek_orders", None) is not None:
+                                h_orders = self.hek_orders[hidx]
+                            h_log_prob, _, _, h_cont_log_prob = self.ac.evaluate_actions(
+                                self.hek_obs[hidx], self.hek_act[hidx], h_orders
                             )
-                            anchor_loss = -h_cont_log_prob.mean()
+                            anchor_loss = -(h_log_prob if h_orders is not None
+                                            else h_cont_log_prob).mean()
                             if not (torch.isnan(anchor_loss) or torch.isinf(anchor_loss)):
                                 loss = loss + hek_coef * anchor_loss
                                 total_hek_anchor_loss += float(anchor_loss.item())

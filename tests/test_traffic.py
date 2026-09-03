@@ -249,3 +249,61 @@ class TestLyapunovController:
                 power_consumed=np.zeros(3),
                 overflow=np.zeros(3),
             )
+
+    # ---------------- reward_v2: 逐用户加权 + q* 冻结 ---------------- #
+    @staticmethod
+    def _v2_ctrl(**overrides):
+        base = dict(
+            K=4, V=1.0, reward_scale=1.0, ee_weight=8.0,
+            use_dinkelbach=True, dinkelbach_outer_update=True,
+            dinkelbach_q_init=0.5,
+        )
+        base.update(overrides)
+        return LyapunovController(**base)
+
+    def test_reward_v2_default_off_matches_baseline(self):
+        """默认参数关闭时 reward 与 v2 机制引入前逐位一致。"""
+        Q = np.array([10.0, 60.0, 10.0, 60.0])
+        D = np.array([0.5, 1.0, 0.5, 1.0])
+        P = np.array([1.0, 1.0, 1.0, 1.0])
+        OV = np.zeros(4)
+        ctrl = self._v2_ctrl()
+        out = ctrl.compute_reward(Q, D, P, OV, R_sum=3.0)
+        # dkl = served_total - q_init*P_eff，q 未被改动
+        served_total, P_eff = 3.0, max(4.0 / 0.35 + 5.0, 3.0)
+        assert out["ee_bonus"] == pytest.approx(8.0 * (served_total - 0.5 * P_eff))
+        assert ctrl.dinkelbach_q == pytest.approx(0.5)  # 外层模式不内部更新
+
+    def test_reward_v2_per_user_weight_shifts_served(self):
+        """积压用户 served 计 2×、饥饿用户计 0.5×（clip 生效）。"""
+        Q = np.array([1.0, 1.0, 1.0, 99.0])   # Q̄ = 25.5
+        D = np.array([1.0, 1.0, 1.0, 1.0])
+        P = np.array([1.0, 1.0, 1.0, 1.0])
+        OV = np.zeros(4)
+        ctrl = self._v2_ctrl(reward_v2_per_user_weight=True, reward_v2_fixed_q=1.9)
+        out = ctrl.compute_reward(Q, D, P, OV, R_sum=4.0)
+        # w = clip(Q/Q̄, 0.5, 2): [0.5, 0.5, 0.5, 2] -> weighted served = 3.5
+        P_eff = max(4.0 / 0.35 + 5.0, 3.0)
+        assert out["ee_bonus"] == pytest.approx(8.0 * (3.5 - 1.9 * P_eff))
+
+    def test_reward_v2_fixed_q_freezes_and_overrides_external_writes(self):
+        """冻结 q* 后外部写入（rsma_env eta 赋值路径）在下一步被重申覆盖。"""
+        ctrl = self._v2_ctrl(reward_v2_fixed_q=1.9)
+        args = (np.array([1.0] * 4), np.array([1.0] * 4),
+                np.array([1.0] * 4), np.zeros(4))
+        ctrl.compute_reward(*args, R_sum=4.0)
+        assert ctrl.dinkelbach_q == pytest.approx(1.9)
+        ctrl.dinkelbach_q = 0.01  # 模拟外层 eta 覆写
+        ctrl.compute_reward(*args, R_sum=4.0)
+        assert ctrl.dinkelbach_q == pytest.approx(1.9)  # 冻结重申生效
+
+    def test_reward_v2_equal_queues_degenerate_to_total(self):
+        """队列全等时 w≡1，加权 served 精确等于 served_total。"""
+        Q = np.array([30.0] * 4)
+        D = np.array([0.3, 0.6, 0.9, 1.2])
+        P = np.array([1.0] * 4)
+        ctrl = self._v2_ctrl(reward_v2_per_user_weight=True, reward_v2_fixed_q=1.9)
+        out_w = ctrl.compute_reward(Q, D, P, np.zeros(4), R_sum=3.0)
+        ctrl2 = self._v2_ctrl(reward_v2_fixed_q=1.9)
+        out_b = ctrl2.compute_reward(Q, D, P, np.zeros(4), R_sum=3.0)
+        assert out_w["ee_bonus"] == pytest.approx(out_b["ee_bonus"])

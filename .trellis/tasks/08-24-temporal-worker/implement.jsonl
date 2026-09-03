@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/08-24-temporal-worker/research/architecture-constraints.md", "reason": "历史窗口设计的全部代码约束（不可变评估脚本兼容、obs布局、零填充等价性、测试影响面）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "改常量/特征前先搜索既有实现与先例（如 obs_include_csi_quality 开关先例）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "改动横跨 env obs / config / models 构造 / 训练入口多层，需跨层一致性检查"}

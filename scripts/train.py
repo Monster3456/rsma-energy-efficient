@@ -128,6 +128,26 @@ if __name__ == "__main__":
     parser.add_argument('--smoke', action='store_true',
                         help='冒烟测试模式：极小配置快速验证可运行性')
 
+    # 物理层参数覆盖（天线扩容实验）
+    parser.add_argument('--n_r', type=int, default=None,
+                        help='基站接收天线数（覆盖 system.N_r，默认 16）；注意改动会同步改变 SDMA 基线，评估须用同口径')
+
+    # 固定外生流量口径（文献惯例：到达不随容量自缩放）
+    parser.add_argument('--fixed_lambda', type=float, default=None,
+                        help='固定外生流量口径：关闭 adaptive_lambda 并把 lambda_rate 钉为该值 '
+                             '（到达为外生泊松过程，不随信道容量自缩放；文献对照与取值依据见 '
+                             '.trellis/tasks/08-24-temporal-worker/experiment-results.md 优化背景审计节）；'
+                             '与默认自适应口径（λ∝容量）不可横比，评估须加 '
+                             'evaluate_snr_sweep_temporal.py --fixed_lambda 同值')
+
+    # reward_v2: 结构性奖励修复（Run 8，默认全关 = 官方口径）
+    parser.add_argument('--reward_v2_per_user_weight', action='store_true',
+                        help='Dinkelbach EE 线性项分子改逐用户加权 Σw_k·D_k（w=clip(Q/Q̄,0.5,2)），'
+                             '修正深过载速率均等化分配偏向（corr(R,Q)=-0.2 诊断）')
+    parser.add_argument('--reward_v2_fixed_q', type=float, default=None,
+                        help='冻结 Dinkelbach q* 为该固定参考值（>0；覆盖 EMA/外层更新），'
+                             '给 dkl=Σw·D−q_ref·P_eff 真实可越门槛，激活省电压力')
+
     # Mean-Field MAPPO toggles
     parser.add_argument('--no-softmax-power-share', action='store_true',
                         help='禁用 softmax 功率份额（恢复逐用户独立 p_total）')
@@ -145,6 +165,39 @@ if __name__ == "__main__":
                         help='专家头数量（覆盖 ppo.n_bucket_experts）')
     parser.add_argument('--lr-bucket-expert', type=float, default=None,
                         help='专家头学习率（覆盖 ppo.lr_bucket_expert）')
+
+    # Backpressure 先验（actor 功率头结构偏置）
+    parser.add_argument('--backpressure_beta', type=float, default=None,
+                        help='Worker actor 功率 logit += beta*(Q_k/Q_mean) 的先验强度'
+                             '（max-weight 结构先验；默认 0=关闭。注册为 buffer 随 checkpoint '
+                             '传输，评估侧自动生效，无需评估脚本加参数）')
+    parser.add_argument('--backpressure_mode',
+                        choices=['queue', 'queue_channel', 'mw_residual', 'mw_gated'],
+                        default=None,
+                        help='先验形式：queue = beta*(Q_k/Q̄-1)（纯队列加权）；'
+                             'queue_channel = beta*(Q_k*ĥ_k/mean(Q·ĥ)-1)（Q×信道乘积，'
+                             'max-weight 完整形式）；mw_residual = 闭式 max-weight 残差基座'
+                             '（p_raw = atanh(clip(p_mw,0.01,0.95)) + head 残差，p_mw 对齐 '
+                             'sdma_baseline 的 p∝Q，无视 beta；初始化即 SDMA 功率平价）；'
+                             'mw_gated = 同基座乘可学习负载门 g(s)（Run 13：深过载 g→1 '
+                             '保平价、欠载 g→0 释放 head 深度省电；门输入 mean/max 队列 + '
+                             'mean 信道，初始 g≈0.98）。'
+                             '默认 queue。mode 随 checkpoint 传输')
+
+    # Solver-Expert Iteration（初始化层干预，ExIt/AlphaZero 模式）
+    parser.add_argument('--solver-expert', action='store_true',
+                        help='启用单槽 DGLCR surrogate 精修专家热启动：真实 env 逐时隙求解'
+                             '收集演示 → BC 联合预训练连续头+PL 排序头 → 衰减锚定微调')
+    parser.add_argument('--solver-expert-episodes', type=int, default=None,
+                        help='专家演示 episode 数（默认 6；每 slot 求解约 0.3s）')
+    parser.add_argument('--solver-expert-steps', type=int, default=None,
+                        help='每 slot Adam 精修步数（默认 25）')
+    parser.add_argument('--solver-expert-lr', type=float, default=None,
+                        help='专家 Adam 学习率（默认 0.1）')
+    parser.add_argument('--solver-expert-bc-epochs', type=int, default=None,
+                        help='BC 预训练轮数（默认 150）')
+    parser.add_argument('--solver-expert-anchor-updates', type=int, default=None,
+                        help='锚定损失生效的 PPO update 数（默认 40）')
 
     args = parser.parse_args()
 
@@ -258,6 +311,21 @@ if __name__ == "__main__":
     # Mean-Field MAPPO toggles
     if args.no_softmax_power_share:
         config.system.use_softmax_power_share = False
+    if args.n_r is not None:
+        if args.n_r < 1:
+            raise ValueError(f"--n_r 必须 >= 1，got {args.n_r}")
+        config.system.N_r = int(args.n_r)
+    if args.fixed_lambda is not None:
+        if args.fixed_lambda <= 0:
+            raise ValueError(f"--fixed_lambda 必须 > 0，got {args.fixed_lambda}")
+        config.system.adaptive_lambda = False
+        config.system.lambda_rate = float(args.fixed_lambda)
+    if args.reward_v2_per_user_weight:
+        config.lyapunov.reward_v2_per_user_weight = True
+    if args.reward_v2_fixed_q is not None:
+        if args.reward_v2_fixed_q <= 0:
+            raise ValueError(f"--reward_v2_fixed_q 必须 > 0，got {args.reward_v2_fixed_q}")
+        config.lyapunov.reward_v2_fixed_q = float(args.reward_v2_fixed_q)
     if args.no_mean_field_critic:
         config.ppo.use_mean_field_critic = False
     if args.no_per_user_advantage:
@@ -272,6 +340,31 @@ if __name__ == "__main__":
         config.ppo.n_bucket_experts = args.n_bucket_experts
     if args.lr_bucket_expert is not None:
         config.ppo.lr_bucket_expert = args.lr_bucket_expert
+
+    # Backpressure 先验
+    if args.backpressure_beta is not None:
+        if args.backpressure_beta < 0:
+            raise ValueError(f"--backpressure_beta 必须 >= 0，got {args.backpressure_beta}")
+        config.ppo.backpressure_beta = float(args.backpressure_beta)
+    if args.backpressure_mode is not None:
+        if args.backpressure_beta is None:
+            print(f"[Train] 警告: --backpressure_mode={args.backpressure_mode} 已指定但 "
+                  f"--backpressure_beta 未给（默认 0=先验关闭）")
+        config.ppo.backpressure_mode = args.backpressure_mode
+
+    # Solver-Expert Iteration（初始化层干预）
+    if args.solver_expert:
+        config.constraint.solver_expert_enabled = True
+    if args.solver_expert_episodes is not None:
+        config.constraint.solver_expert_episodes = args.solver_expert_episodes
+    if args.solver_expert_steps is not None:
+        config.constraint.solver_expert_steps = args.solver_expert_steps
+    if args.solver_expert_lr is not None:
+        config.constraint.solver_expert_lr = args.solver_expert_lr
+    if args.solver_expert_bc_epochs is not None:
+        config.constraint.solver_expert_bc_epochs = args.solver_expert_bc_epochs
+    if args.solver_expert_anchor_updates is not None:
+        config.constraint.solver_expert_anchor_updates = args.solver_expert_anchor_updates
 
     # 冒烟测试：极小配置覆盖（快速验证代码可运行性）
     if args.smoke:

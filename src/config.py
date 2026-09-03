@@ -244,6 +244,18 @@ class LyapunovConfig:
     dinkelbach_update_interval: int = 10  # 每多少 episode 更新一次 eta
     dinkelbach_anchor_alpha: float = 0.2  # 首周期后 EMA 更新步长
 
+    # reward_v2: 深过载分配修正 + q* 冻结（Run 8，默认全关 = 官方口径行为不变）
+    # 根因（见 experiment-results.md 逐用户诊断）：Dinkelbach 项 served_total 无用户维度，
+    # 策略学到速率均等化（corr(R,Q)=-0.2）；q* EMA 自适应追踪自身 EE 使功率罚中性化（Run 4 证伪）。
+    # per_user_weight: EE 线性项分子改 Σ w_k·D_k，w_k = clip(Q_k/Q̄, lo, hi)
+    #   （队列全等时 w≡1 退化为原行为；高到达积压用户 w→hi、饥饿低到达用户 w→lo）
+    # fixed_q: >0 时冻结 q*（compute_reward 内每步重申，覆盖外层/EMA 写入），
+    #   dkl = Σ w·D − q_ref·P_eff 有真实可越门槛，省电压力不再被 EMA 自中性化
+    reward_v2_per_user_weight: bool = False
+    reward_v2_fixed_q: float = 0.0        # 0.0=关（沿用 EMA/外层更新）；>0=冻结为该值
+    reward_v2_weight_lo: float = 0.5
+    reward_v2_weight_hi: float = 2.0
+
     # State-Augmented 观测：将 λ 桶值 / DVQ 积压 / eta 归一化后注入观测
     # 通过等维替换保持 obs_dim 不变（替换 interference/fairness/distance 三块）
     state_aug_enabled: bool = True
@@ -344,6 +356,22 @@ class ConstraintConfig:
     hek_anchor_coef: float = 0.2        # 锚定损失初始系数
     hek_anchor_decay: float = 0.95      # 锚定系数逐 update 衰减
     hek_base_power: float = 0.5         # 专家目标物理功率占比基值
+
+    # Solver-Expert Iteration（初始化层干预，ExIt/AlphaZero 模式）
+    # 单槽 DGLCR surrogate 在线梯度精修专家（src/optimization/solver_expert.py）
+    # 在真实 env 逐时隙求解：p_logits 经 Adam 精修 + decoding_order 候选择优，
+    # 演示 (obs, 3K cont, K order) 经 bc_pretrain 联合训练连续头 + PL 排序头，
+    # 再以衰减锚定微调（复用 HEK 的 BC/anchor 通道）。需 Worker PL 模式；
+    # solver_expert_enabled=False 时零介入，行为与现状完全一致。
+    solver_expert_enabled: bool = False
+    solver_expert_episodes: int = 6     # 专家演示 episode 数（每 slot 约 0.3s）
+    solver_expert_steps: int = 25       # 每 slot Adam 精修步数
+    solver_expert_lr: float = 0.1       # Adam 学习率
+    solver_expert_bc_epochs: int = 150  # BC 预训练轮数
+    solver_expert_bc_lr: float = 3e-4   # BC 独立 Adam 学习率
+    solver_expert_anchor_updates: int = 40  # 锚定损失生效的 PPO update 数
+    solver_expert_anchor_coef: float = 0.2  # 锚定损失初始系数
+    solver_expert_anchor_decay: float = 0.95  # 锚定系数逐 update 衰减
 
     # CRPO-S: episode级原始目标切换。桶不可行时整段episode用排水盈余奖励(纯可行性目标)，
     # 桶可行时保持EE+Lagrangian现状；迟滞带防目标抖振。use_crpo_switch=False时行为与现状完全一致。
@@ -477,6 +505,17 @@ class PPOConfig:
     bucket_snr_min: float = -5.0
     bucket_snr_max: float = 35.0
     lr_bucket_expert: float = 1e-4       # 专家头学习率（通常低于 actor lr）
+
+    # Backpressure 先验：Worker actor 功率 logit 先验（max-weight 结构先验）。
+    # 默认 beta=0 = 关闭，官方口径逐 bit 不变。注册为非训练 buffer 随 checkpoint 传输，
+    # 评估侧 load_ppo_model 经 load_state_dict(strict=False) 自动加载该值。
+    # mode: "queue" = beta*(Q_k/Q̄-1)（Run 10）；"queue_channel" = beta*(Q_k*ĥ_k/mean(Q·ĥ)-1)
+    # （Run 10b）；"mw_residual" = 闭式 max-weight 残差基座（Run 12，无视 beta：
+    # p_raw = atanh(clip(p_mw,0.01,0.95)) + head 残差，p_mw 对齐 sdma_baseline 的 p∝Q）；
+    # "mw_gated" = 同基座乘可学习负载门 g(s)（Run 13：深过载 g→1 保 SDMA 平价、
+    # 欠载 g→0 释放 head 深度省电；门输入 [mean_q, max_q, mean_h]，初始 g≈0.98）
+    backpressure_beta: float = 0.0
+    backpressure_mode: str = "queue"
 
     # 续训覆盖（从 iter-7 续训时降低 actor lr、收紧 clip 信任域）
     resume_lr_actor_scale: float = 1.0   # 续训时 actor lr *= 该值（建议 0.2~0.33）

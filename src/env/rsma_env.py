@@ -339,6 +339,11 @@ class RSMAEnergyEnv(gym.Env):
             dinkelbach_decay=getattr(lya_cfg, "dinkelbach_decay", 0.99),
             dinkelbach_q_min=getattr(lya_cfg, "dinkelbach_q_min", 0.01),
             dinkelbach_q_max=getattr(lya_cfg, "dinkelbach_q_max", 50.0),
+            # reward_v2: 逐用户 served 加权 + q* 冻结（默认关 = 原行为）
+            reward_v2_per_user_weight=getattr(lya_cfg, "reward_v2_per_user_weight", False),
+            reward_v2_fixed_q=getattr(lya_cfg, "reward_v2_fixed_q", 0.0),
+            reward_v2_weight_lo=getattr(lya_cfg, "reward_v2_weight_lo", 0.5),
+            reward_v2_weight_hi=getattr(lya_cfg, "reward_v2_weight_hi", 2.0),
         )
 
     def _parse_action(self, action) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -370,7 +370,9 @@ class ActorCriticAttn(nn.Module):
                  bucket_snr_min=-5.0,
                  bucket_snr_max=35.0,
                  use_c3po_cost_head=False,
-                 c3po_n_points=7):
+                 c3po_n_points=7,
+                 backpressure_beta=0.0,
+                 backpressure_mode="queue"):
         """
         Args:
             inject_global_to_per_user: 把 global 中后 n_global_inject 维（snr_norm, eps_norm）
@@ -384,6 +386,27 @@ class ActorCriticAttn(nn.Module):
             use_bucket_experts: 是否启用 SNR 桶专家多头（冻结共享主干，仅训练 G 个头）
             n_experts: 专家头数量（默认 4，对齐 Lagrangian/RolloutBuffer 的 SNR 桶数）
             bucket_snr_min/max: SNR 桶边界，用于 episode 级硬路由
+            backpressure_beta: 队列反压先验强度。p_logit_k += beta * (Q_k/Q̄ - 1)，
+                把队列压力直接注入功率份额 logits（max-weight/backpressure 结构先验）。
+                注册为 buffer 随 checkpoint 传输：evaluate_snr_sweep.load_ppo_model 重建
+                模型时不传行为开关，靠 load_state_dict(strict=False) 加载此值；β=0 精确无操作。
+            backpressure_mode: 先验形式。"queue" = 纯 Q 加权（Run 10）；
+                "queue_channel" = Q×ĥ 乘积（Run 10b，Tassiulas-Ephremides max-weight
+                完整形式——Run 10 证明纯 Q 加权丢失信道转换效率导致 R_sum -5~6）；
+                "mw_residual" = 闭式 max-weight 残差基座（Run 12）：p_raw =
+                atanh(clip(p_mw,0.01,0.95)) + head_out，p_mw 对齐 sdma_baseline.py
+                的 p∝Q 归一化规则——head 正交初始化(gain 0.01)下训练第 0 步功率
+                即 SDMA 平价，PPO 只学围绕基座的残差修正。
+                "mw_gated" = 负载感知门控基座（Run 13）：基座乘可学习标量门
+                g(s)∈(0,1)，p_raw = g·atanh(clip(p_mw)) + head_out。门输入
+                [mean_q, max_q, mean_h]（per_user 通道 1/1/0，均已归一化），
+                零权重 + bias=4 初始化（g≈0.98 ≈ Run 12 平价起步）——深过载
+                （队列高）学 g→1 保留 SDMA 平价基座，欠载（队列低）学 g→0
+                让残差 head 自由省电（Run 11 已证高 SNR 深度省电可达）。
+                mw_gate 层无条件构造（mode≠3 时不参与前向、无梯度）：评估侧
+                load_ppo_model 用默认参数重建模型，只有模块结构恒在，
+                load_state_dict(strict=False) 才能带上门权重 + mode buffer=3
+                激活路径。四种 mode 均注册为 buffer 随 checkpoint 传输。
         """
         super().__init__()
         if not use_plackett_luce:
@@ -405,6 +428,26 @@ class ActorCriticAttn(nn.Module):
         self.bucket_snr_min = float(bucket_snr_min)
         self.bucket_snr_max = float(bucket_snr_max)
         self.active_bucket = 0
+
+        # ---- Backpressure 先验（非训练 buffer，值随 checkpoint 传输）----
+        _mode_map = {"queue": 0, "queue_channel": 1, "mw_residual": 2, "mw_gated": 3}
+        if backpressure_mode not in _mode_map:
+            raise ValueError(
+                f"backpressure_mode 必须是 {sorted(_mode_map)} 之一，got {backpressure_mode!r}"
+            )
+        self.register_buffer(
+            "backpressure_beta_buf", torch.tensor(float(backpressure_beta))
+        )
+        self.register_buffer(
+            "backpressure_mode_buf",
+            torch.tensor(_mode_map[backpressure_mode], dtype=torch.long),
+        )
+
+        # ---- mw_gated 门控层（Run 13）----
+        # 无条件构造：评估侧重建（默认 mode="queue"）也必须有此模块，
+        # 否则 strict=False 加载不上门权重、mode=3 前向会缺模块。
+        # 具体初始化在 _init_weights() 之后重设（见下方）。
+        self.mw_gate = nn.Linear(3, 1)
 
         # ---- C3PO 7维逐SNR点 cost head ----
         self.use_c3po_cost_head = bool(use_c3po_cost_head)
@@ -513,6 +556,10 @@ class ActorCriticAttn(nn.Module):
             )
 
         self._init_weights()
+        # mw_gate 初始化须在 _init_weights 之后（否则被正交 init 覆盖成输入依赖）：
+        # 零权重 + bias=4 → g=sigmoid(4)≈0.982，初始 ≈ Run 12（mw_residual）平价
+        nn.init.zeros_(self.mw_gate.weight)
+        nn.init.constant_(self.mw_gate.bias, 4.0)
 
         # 桶专家模式：冻结共享主干（含 P3 bias 路径），仅专家头可训练
         if self.use_bucket_experts:
@@ -552,6 +599,63 @@ class ActorCriticAttn(nn.Module):
             per_user = torch.cat([per_user, inject_expanded], dim=-1)  # (batch, K, d_user + n_inject)
 
         return per_user, global_feat
+
+    def _backpressure_shift(self, per_user):
+        """Backpressure 先验：返回 (batch, K) 的功率 logit / p_raw 偏移。
+
+        mode="queue"（Run 10）: beta * (Q_k/Q̄ - 1)
+        mode="queue_channel"（Run 10b）: beta * (Q_k·ĥ_k/mean(Q·ĥ) - 1)
+            Tassiulas-Ephremides max-weight 的完整乘积形式；ĥ 取 per_user[..., 0]
+            = h_gains_norm（与策略所见信道同源），按乘积均值归一化后尺度无关。
+        mode="mw_residual"（Run 12）: atanh(clip(p_mw, 0.01, 0.95))，
+            p_mw = clip(K·Q_k/ΣQ, 0, 1) —— 对齐 sdma_baseline.py:50-54 的 p∝Q
+            归一化规则（份额语义：队列相等时每用户拿满 P_k_max，深过载即 SDMA
+            的全开行为）。注意这是「基座替换」而非加性偏移：调用方把返回值作为
+            p_raw 的基座（head 输出为残差）。Q 全零时 p_mw 均匀 1/K。
+            clamp 上限 0.95：atanh(1.0)=inf 必须有界，0.95 → env p=0.975W
+            （与 SDMA 满功率 1.0W 差 2.5%，残差可修）。
+        mode="mw_gated"（Run 13）: g·atanh(clip(p_mw, 0.01, 0.95))——同 Run 12
+            基座但乘可学习标量门 g(s)∈(0,1)。门输入 [mean_q, max_q, mean_h]
+            （q 取 per_user[...,1]=queue_norm，h 取 [...,0]=h_gains_norm）。
+            g 初始 sigmoid(4)≈0.98（≈Run 12 平价）；欠载（队列低）时学 g→0
+            释放 head 自由降功率，深过载时 g→1 保 SDMA 平价。
+
+        queue / queue_channel 均中心化（batch 内对 K 用户均值为 0）：softmax 份额
+        只取决于相对 logit 差，公共模偏移无信息却会被 tanh 饱和压缩——队列相等时
+        反而压平 logit 差、抹平分配（Run 10 实现期由单调性测试暴露）。
+        均值≈0（全空队列/全零信道）时守卫为全零；beta_buf=0 时精确无操作，
+        官方口径逐 bit 不变（mw_residual / mw_gated 不看 beta_buf，mode 本身即开关）。
+        """
+        q = per_user[:, :, 1]
+        mode = int(self.backpressure_mode_buf)
+        if mode in (2, 3):
+            q_sum = q.sum(dim=1, keepdim=True)
+            p_mw = torch.where(
+                q_sum > 1e-8,
+                q * self.K / (q_sum + 1e-8),
+                torch.full_like(q, 1.0 / self.K),
+            )
+            p_mw = p_mw.clamp(0.0, 1.0).clamp(0.01, 0.95)
+            base = torch.atanh(p_mw)
+            if mode == 2:
+                return base
+            h = per_user[:, :, 0]
+            gate_x = torch.stack(
+                [q.mean(dim=1), q.max(dim=1).values, h.mean(dim=1)], dim=1
+            )  # (batch, 3)
+            g = torch.sigmoid(self.mw_gate(gate_x)).squeeze(-1)  # (batch,)
+            return g.unsqueeze(-1) * base
+        if mode == 1:
+            h = per_user[:, :, 0]
+            w = q * h
+            w_mean = w.mean(dim=1, keepdim=True)
+            ratio = w / (w_mean + 1e-6) - 1.0
+            ratio = torch.where(w_mean > 1e-6, ratio, torch.zeros_like(ratio))
+        else:
+            q_mean = q.mean(dim=1, keepdim=True)
+            ratio = q / (q_mean + 1e-6) - 1.0
+            ratio = torch.where(q_mean > 1e-6, ratio, torch.zeros_like(ratio))
+        return self.backpressure_beta_buf * ratio
 
     def _actor_forward(self, obs):
         """Actor 主干：返回 (batch, K, hidden) per-user representations."""
@@ -670,12 +774,18 @@ class ActorCriticAttn(nn.Module):
         h = self._actor_forward(obs)  # (batch, K, hidden)
         head_out = self._head_forward(h, bucket_indices=bucket_indices)  # (batch, K, 4)
         # P3: SNR/ε 直通 head bias（broadcast 到所有 K 用户）
-        _, global_feat_act = self._split_obs(obs)
+        per_user_act, global_feat_act = self._split_obs(obs)
         a_bias = self.global_to_alpha_bias(global_feat_act).unsqueeze(1)  # (batch, 1, 1)
         p_bias = self.global_to_p_bias(global_feat_act).unsqueeze(1)
         # 拆 4 维
         alpha_raw = head_out[..., 0] + a_bias.squeeze(-1)   # (batch, K)
         p_raw     = head_out[..., 1] + p_bias.squeeze(-1)   # (batch, K)
+        bp = self._backpressure_shift(per_user_act)
+        if int(self.backpressure_mode_buf) in (2, 3):
+            # mw_residual / mw_gated：基座替换——p 块均值 = 闭式 max-weight(×门) + head 残差
+            p_raw = bp + head_out[..., 1]
+        else:
+            p_raw = p_raw + bp
         d_raw     = head_out[..., 2]    # (batch, K)
         z_raw     = head_out[..., 3]    # (batch, K)
 
@@ -733,11 +843,16 @@ class ActorCriticAttn(nn.Module):
         h = self._actor_forward(obs)
         head_out = self._head_forward(h, bucket_indices=bucket_indices)
         # P3: SNR/ε 直通 head bias
-        _, global_feat_eval = self._split_obs(obs)
+        per_user_eval, global_feat_eval = self._split_obs(obs)
         a_bias = self.global_to_alpha_bias(global_feat_eval).unsqueeze(1)
         p_bias = self.global_to_p_bias(global_feat_eval).unsqueeze(1)
         alpha_raw = head_out[..., 0] + a_bias.squeeze(-1)
         p_raw = head_out[..., 1] + p_bias.squeeze(-1)
+        bp = self._backpressure_shift(per_user_eval)
+        if int(self.backpressure_mode_buf) in (2, 3):
+            p_raw = bp + head_out[..., 1]
+        else:
+            p_raw = p_raw + bp
         d_raw = head_out[..., 2]
         z_raw = head_out[..., 3]
         continuous_mean = torch.cat([alpha_raw, p_raw, d_raw], dim=-1)
@@ -802,6 +917,7 @@ class ActorCriticAttn(nn.Module):
         shared_names = {
             "user_embed.", "film.", "global_proj.", "attn_layers.",
             "global_to_alpha_bias.", "global_to_p_bias.", "user_head.",
+            "mw_gate.",
         }
         params = []
         for name, p in self.named_parameters():

@@ -105,6 +105,11 @@ class LyapunovController:
         dinkelbach_q_min: float = 0.01,
         dinkelbach_q_max: float = 50.0,
         dinkelbach_outer_update: bool = False,
+        # reward_v2: 逐用户 served 加权 + q* 冻结（默认关 = 原行为）
+        reward_v2_per_user_weight: bool = False,
+        reward_v2_fixed_q: float = 0.0,
+        reward_v2_weight_lo: float = 0.5,
+        reward_v2_weight_hi: float = 2.0,
     ) -> None:
         if K <= 0:
             raise ValueError(f"K must be positive, got {K}")
@@ -267,6 +272,12 @@ class LyapunovController:
         self._dkl_served_ema = 0.0
         self._dkl_power_ema = 0.0
 
+        # reward_v2: 逐用户 served 加权 + q* 冻结
+        self.reward_v2_per_user_weight = bool(reward_v2_per_user_weight)
+        self.reward_v2_fixed_q = float(reward_v2_fixed_q)
+        self.reward_v2_weight_lo = float(reward_v2_weight_lo)
+        self.reward_v2_weight_hi = float(reward_v2_weight_hi)
+
     # ------------------------------------------------------------------ #
     # Episode lifecycle
     # ------------------------------------------------------------------ #
@@ -348,7 +359,33 @@ class LyapunovController:
         P_consume = total_power / self.pa_efficiency + self.circuit_power
         P_eff = max(P_consume, self.ee_power_floor)
         if self.use_dinkelbach:
-            if not self.dinkelbach_outer_update:
+            # reward_v2: 逐用户 served 加权。w_k = clip(Q_k/Q̄, lo, hi)：
+            # 队列全等时 w≡1 精确退化为原 served_total；积压用户 w>1、
+            # 饥饿用户 w<1，使 EE 线性项梯度指向「把功率搬到有数据的用户」。
+            if self.reward_v2_per_user_weight:
+                q_mean = float(np.mean(Q))
+                w_user = np.clip(
+                    Q / max(q_mean, 1e-8),
+                    self.reward_v2_weight_lo,
+                    self.reward_v2_weight_hi,
+                )
+                served_for_dkl = float(np.sum(w_user * D))
+            else:
+                served_for_dkl = served_total
+            if self.reward_v2_fixed_q > 0.0:
+                # 冻结 q*：每步重申固定参考值，覆盖 rsma_env 外层 eta 赋值与
+                # main.py 外层更新的任何写入（单点强制，两处调用点无需改动）
+                self.dinkelbach_q = self.reward_v2_fixed_q
+                if not self.dinkelbach_outer_update:
+                    # 维持 EMA 状态不变量（仅日志意义），不参与 q
+                    beta = 1.0 - self.dinkelbach_decay
+                    self._dkl_served_ema = (
+                        self.dinkelbach_decay * self._dkl_served_ema + beta * served_for_dkl
+                    )
+                    self._dkl_power_ema = (
+                        self.dinkelbach_decay * self._dkl_power_ema + beta * P_eff
+                    )
+            elif not self.dinkelbach_outer_update:
                 # Dinkelbach 在线 q* 更新：指数加权累积比率（~100 步窗口）
                 beta = 1.0 - self.dinkelbach_decay
                 self._dkl_served_ema = self.dinkelbach_decay * self._dkl_served_ema + beta * served_total
@@ -356,7 +393,7 @@ class LyapunovController:
                 q_new = self._dkl_served_ema / max(self._dkl_power_ema, 1e-8)
                 self.dinkelbach_q = float(np.clip(q_new, self.dinkelbach_q_min, self.dinkelbach_q_max))
             # 线性目标 R - q*·P：梯度 dR/dP - q* 在低功率为正（log 陡峭段），推高功率
-            dkl_value = served_total - self.dinkelbach_q * P_eff
+            dkl_value = served_for_dkl - self.dinkelbach_q * P_eff
             ee_value = served_total / P_eff  # 保留比率用于日志/评估兼容
             ee_bonus = float(self.ee_weight * dkl_value)
         else:

@@ -1,10 +1,10 @@
 # Energy-Efficient Scheduling for Overloaded RSMA MU-MIMO Uplink under Per-SNR Delivery Constraints: Hierarchical Reinforcement Learning with Solver-Expert Distillation
 
-> **Draft v1 (2026-09-11).** Markdown draft of an IEEE JSAC/TWC-style paper. All numbers are
+> **Draft v2 (2026-09-11).** Markdown draft of an IEEE JSAC/TWC-style paper. All numbers are
 > taken from official evaluations recorded in `docs/paper-results.md` and
-> `.trellis/tasks/09-02-solver-expert/experiment-results.md`. Citations marked
-> `[wiki:file]` refer to verified papers in `research-wiki/papers/` whose full
-> bibliographic entries must be filled before submission.
+> `.trellis/tasks/09-02-solver-expert/experiment-results.md`. All 18 references were
+> web-verified on 2026-09-11 (arXiv/IEEE/DBLP records; see verification notes in
+> commit history); venues updated where a journal/conference version exists.
 
 ---
 
@@ -56,8 +56,7 @@ the sum rate, and queueing delays grow without a scheduling policy that is
 explicitly queue-aware. Rate-splitting multiple access (RSMA) mitigates overload by
 splitting each message into a *common* stream decoded by all users and a *private*
 stream decoded by its intended user, with successive interference cancellation
-(MMSE-SIC) at the receiver [wiki:yu2022_robust_design_ratesplitting,
-wiki:karim2025_uplink_rate_splitting]. Realizing RSMA's promise, however, requires
+(MMSE-SIC) at the receiver [1], [2], [10]. Realizing RSMA's promise, however, requires
 solving a coupled, per-slot combinatorial problem—power allocation across users,
 the common/private split, and the SIC decoding order—repeatedly and online, under
 **imperfect CSI** and a realistic power-consumption model.
@@ -89,13 +88,13 @@ DRL fails here for a structural reason: the combinatorial SIC order and the
 non-differentiable rate expressions block gradient-based credit assignment, and
 the reward's delivery gate creates sparse, saturating gradients at exactly the
 points that matter. Recent robust and distributionally-robust DRL beamforming
-[wiki:schröder2025_modelfree_robust_beamforming, wiki:wang2024_distributionally_robust_policy]
-and generalization analyses [wiki:luan2023_achieving_robust_generalization,
-wiki:demirel2025_generalization_reinforcement_learning] address robustness to CSI
-perturbation but not the simultaneous per-point QoS structure. Lyapunov
-drift-plus-penalty methods [wiki:xu2025_lyapunov_driftpluspenalty_method, neely2010]
-provide queue-stability guarantees for *given* rate regions but do not learn the
-combinatorial allocation itself.
+[3], [4], [16] and generalization analyses [5], [6], [18] address robustness to
+CSI perturbation but not the simultaneous per-point QoS structure. Lyapunov
+drift-plus-penalty methods [7], [8], [17] provide queue-stability guarantees for
+*given* rate regions but do not learn the combinatorial allocation itself;
+policy-distillation practice in RANs [15] motivates our teacher→student design
+but does not couple distillation to per-slot combinatorial refinement under
+hard per-point gates.
 
 **Contributions.** We make five contributions.
 
@@ -501,7 +500,8 @@ jointly refine the stream split.
    multiple access with imperfect CSI for cell-free MIMO systems," *arXiv:2203.03690*, 2022.
 2. F. Karim, N. H. Mahmood, A. S. de Sena, D. Kumar, B. Clerckx, and M. Latva-aho,
    "Uplink rate splitting multiple access with imperfect channel state information
-   and interference cancellation," *arXiv:2501.19019*, 2025.
+   and interference cancellation," *IEEE Wireless Commun. Lett.*, vol. 14, no. 5,
+   2025 (arXiv:2501.19019), doi:10.1109/LWC.2025.3538800.
 3. A. Schröder, S. Gracla, C. Bockelmann, D. Wübben, and A. Dekorsy, "Model-free
    robust beamforming in satellite downlink using reinforcement learning,"
    *arXiv:2510.25393*, 2025.
@@ -514,7 +514,7 @@ jointly refine the stream split.
    learning for radio access networks," *arXiv:2507.06602*, 2025.
 7. W. Xu, J. Jiang, L. Deng, and D. H.-K. Tsang, "A Lyapunov drift-plus-penalty
    method tailored for reinforcement learning with queue stability,"
-   *arXiv:2506.04291*, 2025.
+   *arXiv:2506.04291*, 2025. (LDPTRLQ)
 8. M. J. Neely, *Stochastic Network Optimization with Application to Communication
    and Queueing Systems*, Morgan & Claypool, 2010.
 9. W. Dinkelbach, "On nonlinear fractional programming," *Management Science*,
@@ -530,6 +530,17 @@ jointly refine the stream split.
 13. J. A. Plackett, "The analysis of permutations," *Applied Statistics*, vol. 24,
     no. 2, pp. 193–202, 1975. *(Plackett-Luce order model)*
 14. R. D. Luce, *Individual Choice Behavior*, Wiley, 1959. *(choice axiom / Luce model)*
+15. S. Khosravi, B. Demirel, L. Zhou, J. Rasines, and P. Soldati, "Practical policy
+    distillation for reinforcement learning in radio access networks," in *Proc.
+    IEEE PIMRC*, 2025 (arXiv:2511.06563).
+16. M. Cui, D. Zhou, Y. Han, G. A. Hanasusanto, Q. Wang, H. Zhang, and Z. Zhou,
+    "DR-SAC: distributionally robust soft actor-critic for reinforcement learning
+    under uncertainty," in *Proc. ICLR*, 2026 (arXiv:2506.12622).
+17. A. Rashwan, K. Briggs, and C. Budd, "A neural drift-plus-penalty algorithm for
+    network power allocation and routing," *arXiv:2509.09637*, 2025.
+18. D. Luan and J. Thompson, "Achieving robust channel estimation neural networks
+    by designed training data," *IEEE Trans. Cogn. Commun. Netw.*, 2025
+    (arXiv:2507.12630). *(journal extension of [5])*
 
 **Figures.** Fig. 1 = `docs/paper/figs/benchmarks_seed_band.png` (benchmark + seed
 band); Fig. 2 = `docs/paper/figs/ablation_delivery_seeds.png`

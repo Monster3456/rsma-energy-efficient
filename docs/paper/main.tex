@@ -105,12 +105,15 @@ fails for a structural reason: the combinatorial SIC order and non-differentiabl
 rate expressions block gradient-based credit assignment, and the reward's delivery
 gate creates sparse, saturating gradients at exactly the points that matter.
 Recent robust and distributionally-robust DRL beamforming
-\cite{schroder2025modelfree,wang2024distributionally} and generalization analyses
-\cite{luan2023achieving,demirel2025generalization} address robustness to CSI
-perturbation but not the simultaneous per-point QoS structure. Lyapunov
-drift-plus-penalty methods \cite{xu2025lyapunov,neely2010stochastic} provide
-queue-stability guarantees for \emph{given} rate regions but do not learn the
-combinatorial allocation itself.
+\cite{schroder2025modelfree,wang2024distributionally,cui2025drsac} and
+generalization analyses \cite{luan2023achieving,demirel2025generalization,luan2025robust}
+address robustness to CSI perturbation but not the simultaneous per-point QoS
+structure. Lyapunov drift-plus-penalty methods
+\cite{xu2025lyapunov,neely2010stochastic,rashwan2025neural} provide queue-stability
+guarantees for \emph{given} rate regions but do not learn the combinatorial
+allocation itself; policy-distillation practice in RANs \cite{khosravi2025practical}
+motivates our teacher$\to$student design but does not couple distillation to
+per-slot combinatorial refinement under hard per-point gates.
 
 \emph{Contributions.} (i) We formalize EE maximization for overloaded RSMA
 MU-MIMO uplink under per-SNR-point delivery and queue constraints relative to
@@ -300,9 +303,24 @@ MMSE-SIC; adaptive arrivals; 3 QoS classes.
 
 \emph{Evaluation.} Official sweep over $\mathcal{S}=\{0,5,10,15,20,25,30\}$\,dB, 50
 episodes/point, imperfect CSI; gates and lexicographic score per
-\S\ref{sec:system}. Baselines: SDMA, NOMA, equal-power. Every score is produced by
-the same immutable evaluation script; checkpoints selected by the guard are
-re-evaluated officially.
+\S\ref{sec:system}. Every score is produced by the same immutable evaluation
+script; checkpoints selected by the guard are re-evaluated officially.
+
+\emph{Comparator set (classical + recent).} Beyond classical SDMA/NOMA/equal-power,
+we compare against four recent (2025--2026) algorithms re-implemented in the
+identical environment and protocol: (i) \emph{LDPTRLQ-style} single-timescale
+Lyapunov drift-plus-penalty RL \cite{xu2025lyapunov} (queue-stable DPP reward, no
+hierarchy, no distillation); (ii) \emph{DR-SAC} \cite{cui2025drsac},
+distributionally-robust SAC trained against the worst case over the SNR/CSI
+uncertainty domain (ICLR 2026); (iii) \emph{neural-DPP} \cite{rashwan2025neural}, a
+learned per-slot drift-plus-penalty policy for power allocation; (iv)
+\emph{DiffOpt}, a training-free model-based comparator running the differentiable
+MMSE-SIC shadow engine as a per-slot online optimizer (the solver expert without
+any learned policy), isolating learning from per-slot optimization. The
+repository's adaptive-power and water-filling heuristics are additional
+non-learned references. Trained comparators (i)--(iii) share the observation/action
+interface and are pre-registered before training; DiffOpt/adaptive/water-filling
+are evaluated on the identical grid (\texttt{scripts/evaluate\_extended\_baselines.py}).
 
 \emph{Replication and pre-registration.} The champion configuration is replicated
 verbatim at seeds 43 and 44 (besides seed 42). All fine-tuning variants were
@@ -462,14 +480,15 @@ history $H=4$. PPO: clip 0.1, rollout 2048, batch 64, 8 epochs, actor lr 3e-5,
 GAE 0.95. Expert: Adam 25 steps lr 0.1 cold-start, 8{,}000 demos. Guard v2:
 6 points $\times$ 16 episodes + queue bar.
 
-\begin{thebibliography}{14}
+\begin{thebibliography}{18}
 \bibitem{yu2022robust} D.~Yu, S.-H.~Park, O.~Simeone, and S.~Shamai, ``Robust
 design of rate-splitting multiple access with imperfect CSI for cell-free MIMO
 systems,'' \emph{arXiv:2203.03690}, 2022.
 \bibitem{karim2025uplink} F.~Karim, N.~H.~Mahmood, A.~S.~de Sena, D.~Kumar,
 B.~Clerckx, and M.~Latva-aho, ``Uplink rate splitting multiple access with
 imperfect channel state information and interference cancellation,''
-\emph{arXiv:2501.19019}, 2025.
+\emph{IEEE Wireless Commun. Lett.}, vol.~14, no.~5, 2025,
+doi:10.1109/LWC.2025.3538800 (arXiv:2501.19019).
 \bibitem{schroder2025modelfree} A.~Schr\"oder, S.~Gracla, C.~Bockelmann,
 D.~W\"ubben, and A.~Dekorsy, ``Model-free robust beamforming in satellite downlink
 using reinforcement learning,'' \emph{arXiv:2510.25393}, 2025.
@@ -485,7 +504,7 @@ P.~Soldati, ``Generalization in reinforcement learning for radio access
 networks,'' \emph{arXiv:2507.06602}, 2025.
 \bibitem{xu2025lyapunov} W.~Xu, J.~Jiang, L.~Deng, and D.~H.-K.~Tsang, ``A
 Lyapunov drift-plus-penalty method tailored for reinforcement learning with queue
-stability,'' \emph{arXiv:2506.04291}, 2025.
+stability,'' \emph{arXiv:2506.04291}, 2025. (LDPTRLQ)
 \bibitem{neely2010stochastic} M.~J.~Neely, \emph{Stochastic Network Optimization
 with Application to Communication and Queueing Systems}. Morgan \& Claypool, 2010.
 \bibitem{dinkelbach1967} W.~Dinkelbach, ``On nonlinear fractional programming,''
@@ -502,6 +521,19 @@ approximation,'' in \emph{Adv. Neural Inf. Process. Syst. (NeurIPS)}, 1999.
 \bibitem{plackett1975} J.~A.~Plackett, ``The analysis of permutations,''
 \emph{Applied Statistics}, vol.~24, no.~2, pp.~193--202, 1975.
 \bibitem{luce1959} R.~D.~Luce, \emph{Individual Choice Behavior}. Wiley, 1959.
+\bibitem{khosravi2025practical} S.~Khosravi, B.~Demirel, L.~Zhou, J.~Rasines, and
+P.~Soldati, ``Practical policy distillation for reinforcement learning in radio
+access networks,'' in \emph{Proc. IEEE PIMRC}, 2025 (arXiv:2511.06563).
+\bibitem{cui2025drsac} M.~Cui, D.~Zhou, Y.~Han, G.~A.~Hanasusanto, Q.~Wang,
+H.~Zhang, and Z.~Zhou, ``DR-SAC: distributionally robust soft actor-critic for
+reinforcement learning under uncertainty,'' in \emph{Proc. ICLR}, 2026
+(arXiv:2506.12622).
+\bibitem{rashwan2025neural} A.~Rashwan, K.~Briggs, and C.~Budd, ``A neural
+drift-plus-penalty algorithm for network power allocation and routing,''
+\emph{arXiv:2509.09637}, 2025.
+\bibitem{luan2025robust} D.~Luan and J.~Thompson, ``Achieving robust channel
+estimation neural networks by designed training data,'' \emph{IEEE Trans. Cogn.
+Commun. Netw.}, 2025 (arXiv:2507.12630).
 \end{thebibliography}
 
 \end{document}

@@ -37,9 +37,17 @@ def _hm_bucket(snr_db: float) -> int:
     return int(np.clip(idx, 0, len(_HM_TARGETS) - 1))
 
 
-def _hm_init_state(target_scale: float = 1.0) -> dict:
-    """初始化逐点 delivery EMA、达标标志、连续未达标 streak 与采样计数。"""
-    targets = _HM_TARGETS * float(target_scale)
+def _hm_init_state(target_scale: float = 1.0, point_targets=None) -> dict:
+    """初始化逐点 delivery EMA、达标标志、连续未达标 streak 与采样计数。
+
+    M5.3: point_targets 提供 7 个逐点目标时直接采用（忽略 target_scale）。
+    默认目标 = SDMA 逐点 delivery，对"已全面超越 SDMA"的策略 shortfall 恒 0、
+    机制失明；逐点覆盖用于把挖掘压力定向到策略自身的弱点（如 0/30dB）。
+    """
+    if point_targets and len(point_targets) == len(_HM_TARGETS):
+        targets = np.asarray(point_targets, dtype=float).copy()
+    else:
+        targets = _HM_TARGETS * float(target_scale)
     return {
         'targets': targets,
         'ema': targets.copy(),
@@ -121,7 +129,11 @@ def _hm_sample_snr(state: dict, w_hard: float, floor_frac: float,
         w_hard * 0.5, w_hard
     )
     shortfall = np.maximum(targets - state['ema'], 0.0)
-    streak_boost = np.minimum(streak_mult ** state['streak'], streak_cap)
+    # M5.3 修复：重加权后未达标桶 streak 可达数千，streak_mult**streak 在
+    # ~1.5^1450 处溢出 float64（RuntimeWarning: overflow encountered in power）。
+    # 指数截断到 64 再幂——结果本就被 streak_cap 封顶，截断不改变任何取值。
+    streak_boost = np.minimum(
+        streak_mult ** np.minimum(state['streak'], 64), streak_cap)
     raw = base + w_eff * shortfall * streak_boost
     probs = raw / max(float(raw.sum()), 1e-12)
     b = int(rng.choice(n, p=probs))
@@ -420,8 +432,13 @@ def _hek_collect_expert(env: RSMAEnergyEnv, config, n_episodes: int):
 
 
 def _solver_expert_collect(env: RSMAEnergyEnv, config, meta_ac, device,
-                           n_episodes: int, n_steps: int = 25, lr: float = 0.1):
+                           n_episodes: int, n_steps: int = 25, lr: float = 0.1,
+                           mode: str = "teacher", student_ac=None):
     """Solver-Expert: 单槽 DGLCR surrogate 精修专家在真实 env 收集演示。
+
+    mode="teacher"（默认，M4 口径）: 轨迹由教师动作推进（教师状态分布）。
+    mode="relabel"（M5-R1, ExIt-2）: 轨迹由学生策略（student_ac 确定性 act）
+    推进，标签仍为教师从学生状态逐槽 solve 的动作——DAgger 式协变量偏移校正。
 
     每时隙 expert.solve() 以冻结对偶变量在线精修 p_logits 并从 order 候选
     集择优，产生 (obs, 3K 连续动作, K 优先级) 三元组（order 为 env 约定的
@@ -436,6 +453,8 @@ def _solver_expert_collect(env: RSMAEnergyEnv, config, meta_ac, device,
         (expert_obs, expert_act, expert_orders):
         (N, obs_dim) / (N, 3K) float32 与 (N, K) int64 数组。
     """
+    if mode == "relabel" and student_ac is None:
+        raise ValueError("mode='relabel' 需要 student_ac（学生策略网络）")
     K = env.K
     T_s = int(getattr(config.hierarchical, "T_s", 20))
     max_steps_per_ep = int(getattr(config.system, "T", 200))
@@ -453,7 +472,20 @@ def _solver_expert_collect(env: RSMAEnergyEnv, config, meta_ac, device,
             expert_obs.append(np.asarray(obs, dtype=np.float32).copy())
             expert_act.append(result["cont_action"].astype(np.float32))
             expert_orders.append(np.asarray(result["order"], dtype=np.int64))
-            obs, _, terminated, truncated, _ = env.step(result["action"])
+            if mode == "relabel":
+                # M5-R1: 轨迹按学生策略推进（on-policy 状态分布），标签=教师
+                obs_t = torch.as_tensor(
+                    obs, dtype=torch.float32, device=device).unsqueeze(0)
+                with torch.no_grad():
+                    s_cont, s_order, _, _, _ = student_ac.act(
+                        obs_t, deterministic=True)
+                step_action = np.concatenate([
+                    s_cont.squeeze(0).cpu().numpy(),
+                    s_order.squeeze(0).cpu().numpy().astype(np.float64),
+                ])
+            else:
+                step_action = result["action"]
+            obs, _, terminated, truncated, _ = env.step(step_action)
             if terminated or truncated:
                 break
             if env.step_in_episode % T_s == 0:
@@ -470,6 +502,143 @@ def _solver_expert_collect(env: RSMAEnergyEnv, config, meta_ac, device,
         np.stack(expert_act).astype(np.float32),
         np.stack(expert_orders).astype(np.int64),
     )
+
+
+# ---- M5-F5: 训练中评估守卫参考值 ----
+# 出处: logs/_eval_m4_bc_init.txt（bc_init.pt 官方口径 7 点 × 50ep, 2026-09-07）
+# 守卫仅用 {0,5,30} 三点: 0/5dB = Run 3 历史缺口区, 30dB = M4 微调 queue 门首先失守点
+_GUARD_POINTS = (0.0, 5.0, 30.0)
+# M5.2-F5b: 七点全量参考表（单一事实源）。M5.1 终审证明旧 ok 判据只看 avg_deliv、
+# 不看逐点门与队列，A2 策略爆炸（KL=3e4）仍 19/19 全绿；v2 判据补齐这两个洞。
+# 队列参考取 bc_init 逐点值（比 SDMA×1.1 的 37.92 上限紧得多，能分辨深过载区漂移）。
+_GUARD_REF = {
+    0.0:  dict(bc_deliv=0.882, bc_queue=2.92,  sdma_deliv=0.856, sdma_queue=3.46),
+    5.0:  dict(bc_deliv=0.989, bc_queue=0.43,  sdma_deliv=0.979, sdma_queue=0.68),
+    10.0: dict(bc_deliv=0.993, bc_queue=0.74,  sdma_deliv=0.961, sdma_queue=2.28),
+    15.0: dict(bc_deliv=0.986, bc_queue=2.47,  sdma_deliv=0.887, sdma_queue=11.42),
+    20.0: dict(bc_deliv=0.964, bc_queue=8.70,  sdma_deliv=0.795, sdma_queue=22.39),
+    25.0: dict(bc_deliv=0.924, bc_queue=18.85, sdma_deliv=0.724, sdma_queue=28.76),
+    30.0: dict(bc_deliv=0.871, bc_queue=31.64, sdma_deliv=0.664, sdma_queue=34.47),
+}
+
+
+def _guard_ref_avg(points) -> tuple:
+    """给定守卫点集 → (bc_init delivery 均值, bc_init queue 均值)。"""
+    return (
+        float(np.mean([_GUARD_REF[float(s)]["bc_deliv"] for s in points])),
+        float(np.mean([_GUARD_REF[float(s)]["bc_queue"] for s in points])),
+    )
+
+
+def _guard_run_point(env_g, worker_ac, meta_ac, device, config,
+                     snr_db: float, n_eps: int, seed0: int):
+    """单 SNR 点跑 n_eps 个确定性评估 episode → (avg_delivery, avg_mean_queue).
+
+    口径对齐 evaluate_snr_sweep.py（不可变）: reset(options={'snr_db'}) 固定 SNR，
+    delivery_ratio 取末步 info 的 episode 累计值，mean_queue 取逐步平均。
+    """
+    T = int(getattr(config.system, "T", 200))
+    T_s = int(getattr(config.hierarchical, "T_s", 20))
+    delivs, queues = [], []
+    for i in range(int(n_eps)):
+        obs, _ = env_g.reset(seed=seed0 + i, options={"snr_db": float(snr_db)})
+        _meta_decide(meta_ac, env_g, device)
+        last_deliv, q_sum, n_step = 0.0, 0.0, 0
+        for _ in range(T):
+            obs_t = torch.as_tensor(
+                obs, dtype=torch.float32, device=device).unsqueeze(0)
+            with torch.no_grad():
+                cont, order, _, _, _ = worker_ac.act(obs_t, deterministic=True)
+            act = np.concatenate([
+                cont.squeeze(0).cpu().numpy(),
+                order.squeeze(0).cpu().numpy().astype(np.float64),
+            ])
+            obs, _, term, trunc, info = env_g.step(act)
+            q_sum += float(info.get("mean_queue", 0.0))
+            n_step += 1
+            last_deliv = float(info.get("delivery_ratio", last_deliv))
+            if term or trunc:
+                break
+            if env_g.step_in_episode % T_s == 0:
+                _meta_decide(meta_ac, env_g, device)
+        delivs.append(last_deliv)
+        queues.append(q_sum / max(n_step, 1))
+    return float(np.mean(delivs)), float(np.mean(queues))
+
+
+def _guard_check(guard_env, worker_ac, meta_ac, device, config) -> dict:
+    """守卫 mini-eval: 配置点集 × eval_guard_episodes，官方逐点门 + bc 参考对照。
+
+    M5.2-F5b: v2 判据补上旧版的两个洞（A2 策略爆炸仍全绿的根因）——
+    ok 不再只看 avg_deliv，还要求逐点门全过、且平均队列对照 bc 参考。
+    """
+    n_eps = int(getattr(config.ppo, "eval_guard_episodes", 4))
+    pts_cfg = tuple(getattr(config.ppo, "eval_guard_snr_points", ()) or ())
+    points = tuple(float(s) for s in pts_cfg) if pts_cfg else _GUARD_POINTS
+    v2 = bool(getattr(config.ppo, "eval_guard_v2", False))
+    q_ratio = float(getattr(config.ppo, "eval_guard_queue_ratio", 1.1))
+
+    per_point, points_met = [], 0
+    for snr in points:
+        ref = _GUARD_REF[float(snr)]
+        j = points.index(snr)
+        dv, q = _guard_run_point(
+            guard_env, worker_ac, meta_ac, device, config,
+            snr, n_eps, seed0=2000 + 100 * j)
+        ok_pt = bool(dv >= ref["sdma_deliv"] and q <= 1.1 * ref["sdma_queue"])
+        points_met += int(ok_pt)
+        per_point.append(
+            {"snr_db": snr, "deliv": dv, "queue": q, "met": ok_pt})
+    avg_deliv = float(np.mean([p["deliv"] for p in per_point]))
+    avg_queue = float(np.mean([p["queue"] for p in per_point]))
+    margin = float(getattr(config.ppo, "eval_guard_margin", 0.02))
+    bc_ref_avg, bc_queue_avg = _guard_ref_avg(points)
+
+    deliv_ok = bool(avg_deliv >= bc_ref_avg - margin)
+    if v2:
+        ok = bool(deliv_ok
+                  and points_met == len(points)
+                  and avg_queue <= bc_queue_avg * q_ratio)
+    else:
+        ok = deliv_ok
+    return {
+        "avg_deliv": avg_deliv,
+        "avg_queue": avg_queue,
+        "points_met": points_met,
+        "n_points": len(points),
+        "ok": ok,
+        "per_point": per_point,
+    }
+
+
+def _guard_rollback(worker_ac, meta_ac, worker_trainer, last_good,
+                    halvings: int, lr_groups: list, config) -> int:
+    """M5-F5 劣化处置：恢复 last-good 权重 + actor lr 减半（超限后冻结 actor）。
+
+    _base_lrs 同步减半，使后续的线性衰减 / KL 衰减调度在新基准上生效。
+    Returns: 更新后的回滚计数。
+    """
+    halvings = int(halvings) + 1
+    worker_ac.load_state_dict(last_good[0])
+    meta_ac.load_state_dict(last_good[1])
+    max_halv = int(getattr(config.ppo, "eval_guard_max_halvings", 3))
+    if halvings <= max_halv and lr_groups:
+        lr_floor = float(getattr(config.ppo, "eval_guard_lr_floor", 1e-5))
+        for gi in lr_groups:
+            grp = worker_trainer.optimizer.param_groups[gi]
+            grp["lr"] = max(float(grp["lr"]) * 0.5, lr_floor)
+            worker_trainer._base_lrs[gi] = max(
+                float(worker_trainer._base_lrs[gi]) * 0.5, lr_floor)
+        print(f"[Guard] ROLLBACK #{halvings}: 恢复 last-good 权重, "
+              f"actor lr 减半 -> "
+              f"{worker_trainer.optimizer.param_groups[lr_groups[0]]['lr']:.2e}")
+    else:
+        for gi in lr_groups:
+            worker_trainer.optimizer.param_groups[gi]["lr"] = 0.0
+            worker_trainer._base_lrs[gi] = 0.0
+        print(f"[Guard] ROLLBACK #{halvings} 超过上限({max_halv}): "
+              f"actor 冻结至训练结束（critic/Meta 继续）")
+    return halvings
 
 
 def train(config=None):
@@ -853,7 +1022,12 @@ def train(config=None):
     # 硬例挖掘在课程冻结后继续推未达标点。移除旧冲突逻辑。
     if hm_on and (curl_on or curriculum_scheduler is not None):
         pass
-    hm_state = _hm_init_state(float(getattr(config.ppo, 'hard_mining_target', 1.0))) if hm_on else None
+    hm_point_targets = tuple(getattr(config.ppo, 'hm_point_targets', ()) or ())
+    hm_state = (
+        _hm_init_state(float(getattr(config.ppo, 'hard_mining_target', 1.0)),
+                       hm_point_targets)
+        if hm_on else None
+    )
     hm_w_hard = float(getattr(config.ppo, 'point_w_hard', getattr(config.ppo, 'hard_mining_w_hard', 2.0)))
     hm_decay = float(getattr(config.ppo, 'hard_mining_ema_decay', 0.99))
     hm_floor = float(getattr(config.ppo, 'point_base_floor', getattr(config.ppo, 'hard_mining_floor_frac', 0.5)))
@@ -868,10 +1042,14 @@ def train(config=None):
             if getattr(config.ppo, 'entropy_performance_linked', False)
             else f"fixed_fail_scale={hm_fail_entropy_scale}"
         )
+        tgt_str = (
+            f"targets=[{', '.join(f'{t:.3f}' for t in hm_state['targets'])}](override)"
+            if hm_point_targets else "targets=SDMA(default)"
+        )
         print(
             f"[HardMining] enabled: granularity=point, w_hard={hm_w_hard}, ema_decay={hm_decay}, "
             f"floor={hm_floor}/{len(_HM_TARGETS)}, streak_mult={hm_streak_mult}, "
-            f"streak_cap={hm_streak_cap}, entropy={pl_str}"
+            f"streak_cap={hm_streak_cap}, entropy={pl_str} | {tgt_str}"
         )
 
     reset_options = None
@@ -1260,6 +1438,76 @@ def train(config=None):
                 f"decay={worker_trainer.hek_anchor_decay} "
                 f"updates={worker_trainer.hek_anchor_updates}"
             )
+
+            # ---- M5-R1: ExIt 第二迭代 — on-policy relabel 收集 + 聚合二次 BC ----
+            # 学生（首轮 BC 后）走轨迹、教师从学生状态打标 → 校正 BC 协变量偏移。
+            # 收集口径与首轮一致（eval 配置 snr/load），完成后同样恢复课程档位。
+            # bc_pretrain 会重置 _hek_updates 并用聚合演示替换锚定缓存。
+            if bool(getattr(constraint_cfg, "solver_expert_relabel", False)):
+                env.snr_min_db = float(getattr(
+                    config.ppo, 'curriculum_snr_min_end', config.system.snr_min_db))
+                env.snr_max_db = float(config.system.snr_max_db)
+                env.load_ratio_min = float(config.system.load_ratio_min)
+                env.load_ratio_max = float(getattr(
+                    config.ppo, 'curriculum_load_ratio_max_end',
+                    config.system.load_ratio_max))
+                t0r = time.time()
+                r_obs, r_act, r_orders = _solver_expert_collect(
+                    env, config, meta_ac, device,
+                    n_episodes=int(getattr(
+                        constraint_cfg, 'solver_expert_episodes', 6)),
+                    n_steps=int(getattr(constraint_cfg, 'solver_expert_steps', 25)),
+                    lr=float(getattr(constraint_cfg, 'solver_expert_lr', 0.1)),
+                    mode="relabel", student_ac=worker_ac,
+                )
+                t_relabel = time.time() - t0r
+                (
+                    env.snr_min_db, env.snr_max_db,
+                    env.load_ratio_min, env.load_ratio_max,
+                ) = se_saved_env
+                if bool(getattr(constraint_cfg, "solver_expert_mix_original", True)):
+                    all_obs = np.concatenate([exp_obs, r_obs])
+                    all_act = np.concatenate([exp_act, r_act])
+                    all_orders = np.concatenate([exp_orders, r_orders])
+                else:
+                    all_obs, all_act, all_orders = r_obs, r_act, r_orders
+                bc_info2 = worker_trainer.bc_pretrain(
+                    all_obs, all_act, orders_np=all_orders)
+                relabel_ckpt_path = os.path.join(
+                    checkpoint_dir, "bc_relabel.pt")
+                torch.save(
+                    {
+                        "episode": 0,
+                        "total_steps": 0,
+                        "update_count": 0,
+                        "meta_update_count": 0,
+                        "worker_state_dict": worker_ac.state_dict(),
+                        "meta_state_dict": meta_ac.state_dict(),
+                        "worker_optimizer": worker_trainer.optimizer.state_dict(),
+                        "meta_optimizer": meta_trainer.optimizer.state_dict(),
+                        "config": vars(config.ppo),
+                        "bc_stage": True,
+                        "relabel_stage": True,
+                    },
+                    relabel_ckpt_path,
+                )
+                print(
+                    f"[SolverExpert] relabel(ExIt-2): +{r_obs.shape[0]} "
+                    f"on-policy demos ({t_relabel:.0f}s) | aggregate BC: "
+                    f"n={all_obs.shape[0]} loss={bc_info2['bc_loss']:.4f} "
+                    f"epochs={bc_info2['bc_epochs']} | saved {relabel_ckpt_path}"
+                )
+
+            # ---- M5.2-F6: KL-to-BC 信任域参考快照 ----
+            # 参考中心 = 全部 BC 阶段之后、PPO 微调之前的策略。M5.1 终审证明 Arm A
+            # 的收益来自被 lr 下限冻在 BC 盆地附近（隐式信任域）；F6 把该约束显式化，
+            # 使 lr 得以走正常退火而不丢深过载区行为。load_state_dict 内部拷贝数据，
+            # 无需调用方 deepcopy。
+            if float(getattr(config.ppo, "kl_bc_coef", 0.0)) > 0.0:
+                ok_ref = worker_trainer.set_bc_reference(worker_ac.state_dict())
+                print(f"[KLBC] reference injected={ok_ref} "
+                      f"coef={config.ppo.kl_bc_coef}")
+
             # 演示收集打乱了 env 状态：重新 reset 并重做首段 Meta 决策，
             # 保证主循环从干净初始状态起步
             obs, _ = env.reset()
@@ -1287,6 +1535,47 @@ def train(config=None):
                 _meta_decide(meta_ac, env, device)
             )
             meta_stats = _empty_meta_stats()
+
+    # ---- M5-F4: Meta 冻结（采样照常、梯度更新暂停至指定 episode）----
+    meta_freeze_eps = int(getattr(config.hierarchical, "meta_freeze_episodes", 0))
+    if meta_freeze_eps > 0:
+        print(f"[MetaFreeze] Meta 更新冻结至 ep={meta_freeze_eps}"
+              f"（Worker 在 BC 演示同款 (α,g) 条件分布上稳定）")
+
+    # ---- M5-F5: 评估守卫初始化（eval_guard_enable=False 时零介入）----
+    guard_on = bool(getattr(config.ppo, "eval_guard_enable", False))
+    guard_env = None
+    guard_last_good = None
+    guard_halvings = 0
+    guard_last_ep = 0
+    guard_best_deliv = -1.0
+    guard_lr_groups: list = []
+    if guard_on:
+        guard_env = RSMAEnergyEnv(config)
+        guard_env.snr_domain_randomization = False
+        # actor+log_std 所在 param_group 索引（桶专家模式下组结构不同，按参数集合定位）
+        _actor_ids = ({id(p) for p in worker_ac.actor_params()}
+                      | {id(p) for p in worker_ac.log_std_params()})
+        guard_lr_groups = [
+            i for i, g in enumerate(worker_trainer.optimizer.param_groups)
+            if any(id(p) in _actor_ids for p in g["params"])
+        ]
+        guard_last_good = (
+            {k: v.detach().cpu().clone()
+             for k, v in worker_ac.state_dict().items()},
+            {k: v.detach().cpu().clone()
+             for k, v in meta_ac.state_dict().items()},
+        )
+        guard_pts_cfg = tuple(getattr(config.ppo, "eval_guard_snr_points", ()) or ())
+        guard_points = (tuple(float(s) for s in guard_pts_cfg)
+                        if guard_pts_cfg else _GUARD_POINTS)
+        g_ref_avg, g_q_ref = _guard_ref_avg(guard_points)
+        print(f"[Guard] enabled: every={config.ppo.eval_guard_every}ep "
+              f"points={guard_points} n_eps={config.ppo.eval_guard_episodes} "
+              f"v2={config.ppo.eval_guard_v2} "
+              f"ref={g_ref_avg:.3f}−{config.ppo.eval_guard_margin} "
+              f"q_ref={g_q_ref:.2f}×{config.ppo.eval_guard_queue_ratio} "
+              f"lr_groups={guard_lr_groups}")
 
     while total_steps < max_total_steps:
         worker_buffer.clear()
@@ -1763,9 +2052,14 @@ def train(config=None):
                 meta_buffer.reset()
             meta_train_info = None
         elif meta_buffer.size >= config.hierarchical.meta_update_threshold:
-            meta_train_info = meta_trainer.update(meta_buffer)
-            meta_update_count += 1
-            last_meta_info = meta_train_info
+            if episode_count < meta_freeze_eps:
+                # M5-F4: 冻结期——累积段丢弃，不做 Meta 梯度更新
+                meta_buffer.reset()
+                meta_train_info = None
+            else:
+                meta_train_info = meta_trainer.update(meta_buffer)
+                meta_update_count += 1
+                last_meta_info = meta_train_info
         else:
             meta_train_info = None
 
@@ -1816,6 +2110,24 @@ def train(config=None):
             if pi_coef > 0:
                 mean_deliv = float(np.mean(pi_delivery_buf)) if pi_delivery_buf else 0.0
                 plpi_str = f" | PLPI: dr={mean_deliv:.3f} coef={pi_coef:.3f}"
+
+            # M5.2-F6: KL-to-BC 信任域量级（未启用时不打印）
+            klbc_str = ""
+            if float(update_info.get("kl_bc_coef", 0.0)) > 0.0:
+                klbc_str = (
+                    f" | KLBC={update_info.get('kl_bc_loss', 0.0):.4f} "
+                    f"c={update_info['kl_bc_coef']:.2f}"
+                )
+
+            # M5.4 诊断：band 熵 + log_std（分布无关的真坍缩判据）+ 冻结位。
+            # M5.3 教训：重加权采样后批熵跨臂不可比（混入构成偏移），必须拆分。
+            diag_str = (
+                f" | ENT=[{update_info.get('entropy_lo', 0.0):.1f},"
+                f"{update_info.get('entropy_mid', 0.0):.1f},"
+                f"{update_info.get('entropy_hi', 0.0):.1f}]"
+                f" LS={update_info.get('log_std_mean', 0.0):.2f}"
+                + (" FZ" if update_info.get("lr_frozen", 0.0) > 0 else "")
+            )
 
             # SNR 课程状态信息
             cur_str = ""
@@ -1879,6 +2191,8 @@ def train(config=None):
                 f"{rcpo_str}"
                 f"{dsl_str}"
                 f"{plpi_str}"
+                f"{klbc_str}"
+                f"{diag_str}"
                 f"{cur_str}"
                 f"{curl_str}"
                 f"{hm_str}"
@@ -1944,6 +2258,51 @@ def train(config=None):
                         f"[BestCkpt] Updated best.pt @ update={update_count} "
                         f"MeanReward={cur_mean:.3f}"
                     )
+
+        # ---- M5-F5: 评估守卫（episode 节奏 mini-eval；劣化 → 回滚 + lr 减半）----
+        # 位于 update 边界：当前 buffer 已被消费，回滚后下一轮 rollout 从恢复的
+        # 策略全新采集，无 off-policy 污染
+        if guard_on and episode_count - guard_last_ep >= int(config.ppo.eval_guard_every):
+            guard_last_ep = episode_count
+            g_res = _guard_check(guard_env, worker_ac, meta_ac, device, config)
+            pp_str = " ".join(
+                f"{p['snr_db']:.0f}dB:{p['deliv']:.3f}/Q{p['queue']:.1f}"
+                f"{'√' if p['met'] else '×'}"
+                for p in g_res["per_point"])
+            print(f"[Guard] ep={episode_count} avg_deliv={g_res['avg_deliv']:.4f} "
+                  f"avg_queue={g_res['avg_queue']:.2f} "
+                  f"points_met={g_res['points_met']}/{g_res['n_points']} "
+                  f"ok={g_res['ok']} | {pp_str}")
+            if g_res["avg_deliv"] > guard_best_deliv:
+                guard_best_deliv = g_res["avg_deliv"]
+                torch.save(
+                    {
+                        "episode": episode_count,
+                        "total_steps": total_steps,
+                        "update_count": update_count,
+                        "meta_update_count": meta_update_count,
+                        "worker_state_dict": worker_ac.state_dict(),
+                        "meta_state_dict": meta_ac.state_dict(),
+                        "worker_optimizer": worker_trainer.optimizer.state_dict(),
+                        "meta_optimizer": meta_trainer.optimizer.state_dict(),
+                        "config": vars(config.ppo),
+                        "guard_avg_deliv": guard_best_deliv,
+                    },
+                    os.path.join(checkpoint_dir, "best_guard.pt"),
+                )
+                print(f"[Guard] best_guard.pt updated @ ep={episode_count} "
+                      f"avg_deliv={guard_best_deliv:.4f}")
+            if g_res["ok"]:
+                guard_last_good = (
+                    {k: v.detach().cpu().clone()
+                     for k, v in worker_ac.state_dict().items()},
+                    {k: v.detach().cpu().clone()
+                     for k, v in meta_ac.state_dict().items()},
+                )
+            else:
+                guard_halvings = _guard_rollback(
+                    worker_ac, meta_ac, worker_trainer, guard_last_good,
+                    guard_halvings, guard_lr_groups, config)
 
     # ------------------------- 最终 checkpoint ------------------------- #
     final_ckpt = os.path.join(checkpoint_dir, "final.pt")

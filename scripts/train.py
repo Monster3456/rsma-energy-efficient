@@ -100,6 +100,9 @@ if __name__ == "__main__":
                         help='均匀地板系数 floor_frac（覆盖 ppo.hard_mining_floor_frac）')
     parser.add_argument('--hard-mining-target', type=float, default=None,
                         help='逐桶 SDMA 目标倍数（覆盖 ppo.hard_mining_target，默认 1.0）')
+    parser.add_argument('--hm-point-targets', type=str, default=None,
+                        help='M5.3: 逗号分隔 7 个逐点 delivery 目标（0/5/10/15/20/25/30dB），'
+                             '覆盖硬例挖掘默认 SDMA 目标；不传=默认')
 
     # Task#38: Group-level α 架构
     parser.add_argument('--group_level_alpha', type=lambda v: v.lower() in ('1', 'true', 'yes'),
@@ -198,6 +201,53 @@ if __name__ == "__main__":
                         help='BC 预训练轮数（默认 150）')
     parser.add_argument('--solver-expert-anchor-updates', type=int, default=None,
                         help='锚定损失生效的 PPO update 数（默认 40）')
+    parser.add_argument('--solver-expert-anchor-decay', type=float, default=None,
+                        help='锚定系数逐 update 衰减（默认 0.95；M5 持久锚定用 0.999）')
+    parser.add_argument('--solver-expert-anchor-coef', type=float, default=None,
+                        help='锚定初始系数（默认 0.2）')
+    parser.add_argument('--solver-expert-relabel', action='store_true',
+                        help='M5-R1(ExIt-2): 首轮 BC 后 on-policy relabel 二次收集'
+                             '（学生走轨迹+教师打标）+ 聚合二次 BC')
+    parser.add_argument('--solver-expert-no-mix-original', action='store_true',
+                        help='relabel 时不聚合原始教师轨迹演示（纯 relabel 演示）')
+
+    # M5 SFTP: 安全微调协议（全默认关 = 官方口径零变化）
+    parser.add_argument('--clip_ratio', type=float, default=None,
+                        help='覆盖 PPO clip 范围（默认 0.2；微调建议 0.1）')
+    parser.add_argument('--lr_log_std', type=float, default=None,
+                        help='覆盖 log_std 学习率（默认 1e-3；微调建议 1e-4 防探索坍缩）')
+    parser.add_argument('--actor-warmup-updates', type=int, default=None,
+                        help='M5-F2: 前 N 个 update 只训 critic（actor+log_std 梯度置零）')
+    parser.add_argument('--meta-freeze-episodes', type=int, default=None,
+                        help='M5-F4: 前 N episode Meta 不做梯度更新（采样照常）')
+    parser.add_argument('--kl-stop-lr-decay', type=float, default=None,
+                        help='连续 KL 早停后的 lr 衰减乘子（默认 0.9；1.0=关闭该衰减，'
+                             'M5.1 用于解除微调期 actor lr 饿死）')
+    parser.add_argument('--lr-freeze-update', type=int, default=None,
+                        help='M5.4: 达到该 update 数后 lr 钉死在 lr_decay_final_ratio×base'
+                             '（显式冻结点；不传=关，沿用涌现式触底）')
+    parser.add_argument('--eval-guard', action='store_true',
+                        help='M5-F5: 训练中评估守卫（{0,5,30}dB mini-eval + 劣化回滚/lr减半）')
+    parser.add_argument('--eval-guard-every', type=int, default=None,
+                        help='守卫 mini-eval 间隔 episode（默认 400）')
+    parser.add_argument('--eval-guard-episodes', type=int, default=None,
+                        help='守卫每 SNR 点评估 episode 数（默认 4）')
+    parser.add_argument('--eval-guard-margin', type=float, default=None,
+                        help='守卫 avg_deliv 低于 bc 参考的容忍裕量（默认 0.02）')
+    parser.add_argument('--eval-guard-max-halvings', type=int, default=None,
+                        help='守卫最多回滚+lr减半次数（默认 3，超过冻结 actor）')
+    # ---- M5.2: 显式信任域 + 守卫判据升级 ----
+    parser.add_argument('--kl-bc-coef', type=float, default=None,
+                        help='M5.2-F6: KL(π_θ‖π_BC) 信任域强度（0/不传=关；'
+                             'BC 参考快照在 BC 预训练后自动注入）')
+    parser.add_argument('--eval-guard-v2', action='store_true',
+                        help='M5.2-F5b: 守卫 ok 判据 = avg_deliv 门 AND 逐点门全过 '
+                             'AND avg_queue ≤ bc 参考×ratio（旧版只看 avg_deliv）')
+    parser.add_argument('--eval-guard-queue-ratio', type=float, default=None,
+                        help='M5.2-F5b(v2): avg_queue 对照 bc 参考均值的容差比（默认 1.1）')
+    parser.add_argument('--eval-guard-snr-points', type=str, default=None,
+                        help='M5.2-F5b: 逗号分隔守卫 SNR 点集（如 0,5,15,20,25,30；'
+                             '不传=沿用旧三点 0,5,30）')
 
     args = parser.parse_args()
 
@@ -283,6 +333,9 @@ if __name__ == "__main__":
         config.ppo.hard_mining_floor_frac = args.hard_mining_floor_frac
     if args.hard_mining_target is not None:
         config.ppo.hard_mining_target = args.hard_mining_target
+    if args.hm_point_targets:
+        config.ppo.hm_point_targets = tuple(
+            float(s) for s in args.hm_point_targets.split(",") if s.strip())
 
     # Task#38: Group-level α 架构参数注入
     if args.group_level_alpha is not None:
@@ -365,6 +418,48 @@ if __name__ == "__main__":
         config.constraint.solver_expert_bc_epochs = args.solver_expert_bc_epochs
     if args.solver_expert_anchor_updates is not None:
         config.constraint.solver_expert_anchor_updates = args.solver_expert_anchor_updates
+    if args.solver_expert_anchor_decay is not None:
+        config.constraint.solver_expert_anchor_decay = args.solver_expert_anchor_decay
+    if args.solver_expert_anchor_coef is not None:
+        config.constraint.solver_expert_anchor_coef = args.solver_expert_anchor_coef
+    if args.solver_expert_relabel:
+        config.constraint.solver_expert_relabel = True
+    if args.solver_expert_no_mix_original:
+        config.constraint.solver_expert_mix_original = False
+
+    # M5 SFTP: 安全微调协议
+    if args.clip_ratio is not None:
+        config.ppo.clip_ratio = args.clip_ratio
+    if args.lr_log_std is not None:
+        config.ppo.lr_log_std = args.lr_log_std
+    if args.actor_warmup_updates is not None:
+        config.ppo.actor_warmup_updates = args.actor_warmup_updates
+    if args.meta_freeze_episodes is not None:
+        config.hierarchical.meta_freeze_episodes = args.meta_freeze_episodes
+    if args.kl_stop_lr_decay is not None:
+        config.ppo.kl_stop_lr_decay = args.kl_stop_lr_decay
+    if args.lr_freeze_update is not None:
+        config.ppo.lr_freeze_update = args.lr_freeze_update
+    if args.eval_guard:
+        config.ppo.eval_guard_enable = True
+    if args.eval_guard_every is not None:
+        config.ppo.eval_guard_every = args.eval_guard_every
+    if args.eval_guard_episodes is not None:
+        config.ppo.eval_guard_episodes = args.eval_guard_episodes
+    if args.eval_guard_margin is not None:
+        config.ppo.eval_guard_margin = args.eval_guard_margin
+    if args.eval_guard_max_halvings is not None:
+        config.ppo.eval_guard_max_halvings = args.eval_guard_max_halvings
+    # M5.2
+    if args.kl_bc_coef is not None:
+        config.ppo.kl_bc_coef = args.kl_bc_coef
+    if args.eval_guard_v2:
+        config.ppo.eval_guard_v2 = True
+    if args.eval_guard_queue_ratio is not None:
+        config.ppo.eval_guard_queue_ratio = args.eval_guard_queue_ratio
+    if args.eval_guard_snr_points:
+        config.ppo.eval_guard_snr_points = tuple(
+            float(s) for s in args.eval_guard_snr_points.split(",") if s.strip())
 
     # 冒烟测试：极小配置覆盖（快速验证代码可运行性）
     if args.smoke:

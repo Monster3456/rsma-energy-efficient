@@ -7,6 +7,8 @@ v4 关键改动：
 2. 线性 LR 衰减：在 set_progress(p in [0,1]) 后，每个 group 的 lr 从初始线性衰减到 init * lr_decay_final_ratio
 3. 连续 KL 早停（>=3 次）时，再额外把 lr 乘 kl_stop_lr_decay (0.9)
 """
+import copy
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -56,6 +58,16 @@ class PPOTrainer:
         self.lr_decay_final_ratio = float(getattr(config, "lr_decay_final_ratio", 0.2))
         self.kl_stop_lr_decay = float(getattr(config, "kl_stop_lr_decay", 0.9))
         self.kl_stop_streak_threshold = int(getattr(config, "kl_stop_streak_threshold", 3))
+        # M5.2-F6: KL(π_θ‖π_BC) 显式信任域强度（0=关）。BC 参考副本由
+        # set_bc_reference() 注入；未注入时本项严格无操作。
+        self.kl_bc_coef = float(getattr(config, "kl_bc_coef", 0.0))
+        self._bc_ac = None
+        # M5.4: 显式 lr 冻结点（update 计数）。冠军 Arm A 的"冻结"是 KL 衰减连乘
+        # 触底 lr_decay_final_ratio 下限的涌现结果（u100 起钉死），不可控也不可消融；
+        # 本旋钮把它显式化：达到该 update 数后 scale 恒等于 lr_decay_final_ratio。
+        # 0 = 关（行为逐位不变）。
+        self.lr_freeze_update = int(getattr(config, "lr_freeze_update", 0))
+        self._lr_frozen = False
 
         # 进度（由外部 set_progress 注入），决定线性衰减位置
         self._progress = 0.0
@@ -108,6 +120,13 @@ class PPOTrainer:
         self.hek_anchor_updates = 0
         self.hek_anchor_coef = 0.2
         self.hek_anchor_decay = 0.95
+
+        # ---- M5-F2: critic 预热（SFTP 安全微调协议，默认 0 = 关闭）----
+        # 前 actor_warmup_updates 个 update 只训 critic/cost-critic：
+        # actor+log_std 梯度置零（Adam 零梯度 + 零动量 ⇒ 参数严格不动），
+        # 消除 value 头冷启动期的优势噪声对 BC 盆地的冲击
+        self.actor_warmup_updates = int(getattr(config, "actor_warmup_updates", 0))
+        self._ft_update_count = 0
 
     def predict_cost_value(self, obs) -> torch.Tensor:
         """预测单个观测的 cost 状态价值 V_c(s)（no_grad，返回标量 tensor）。"""
@@ -170,12 +189,16 @@ class PPOTrainer:
         self._apply_lr()
 
     def _apply_lr(self) -> None:
-        # 线性进度衰减
-        progress_scale = (1.0 - self._progress) + self._progress * self.lr_decay_final_ratio
-        # KL 触发的额外衰减保留，但合并后不得低于 lr_decay_final_ratio (1/5) 下限，
-        # 避免 LR 衰减到几乎冻结导致训练失速
-        scale = progress_scale * self._kl_decay_factor
-        scale = max(scale, self.lr_decay_final_ratio)
+        if self._lr_frozen:
+            # M5.4: 显式冻结——scale 钉死在下限，进度退火与 KL 衰减均不再作用
+            scale = self.lr_decay_final_ratio
+        else:
+            # 线性进度衰减
+            progress_scale = (1.0 - self._progress) + self._progress * self.lr_decay_final_ratio
+            # KL 触发的额外衰减保留，但合并后不得低于 lr_decay_final_ratio (1/5) 下限，
+            # 避免 LR 衰减到几乎冻结导致训练失速
+            scale = progress_scale * self._kl_decay_factor
+            scale = max(scale, self.lr_decay_final_ratio)
         for g, base in zip(self.optimizer.param_groups, self._base_lrs):
             g['lr'] = float(base * scale)
 
@@ -273,6 +296,109 @@ class PPOTrainer:
                 opt.step()
                 last_loss = float(loss.item())
         return {"bc_loss": last_loss, "bc_epochs": epochs}
+
+    def _anchor_grad_into(self, actor_params, hek_coef: float, n_samples: int) -> float:
+        """M5-F0: 锚定梯度直接加到 actor_params 的 .grad 上（词典序投影路径专用）。
+
+        演示批 NLL = -log π_θ(demo) 对 actor+log_std 参数求梯度，× hek_coef 累加。
+        锚定是稳定器（把策略拴在教师/BC 盆地），**不参与**词典序零空间投影——
+        投影只应作用于 EE-vs-delivery 的目标梯度冲突。log_std 也在参数表中，
+        锚定天然抑制探索坍缩（M4 熵尖峰 −51→−89 的通道之一）。
+
+        Returns:
+            锚定 NLL 值（日志用）；演示缺失或数值异常时返回 0.0 且不改动梯度。
+        """
+        if getattr(self, "hek_obs", None) is None or hek_coef <= 0.0:
+            return 0.0
+        try:
+            n_hek = int(self.hek_obs.shape[0])
+            hidx = torch.randint(
+                0, n_hek, (int(n_samples),), device=self.hek_obs.device
+            )
+            h_orders = (
+                self.hek_orders[hidx]
+                if getattr(self, "hek_orders", None) is not None else None
+            )
+            h_log_prob, _, _, h_cont_log_prob = self.ac.evaluate_actions(
+                self.hek_obs[hidx], self.hek_act[hidx], h_orders
+            )
+            anchor_nll = -(
+                h_log_prob if h_orders is not None else h_cont_log_prob
+            ).mean()
+            if torch.isnan(anchor_nll) or torch.isinf(anchor_nll):
+                return 0.0
+            params = [p for p in actor_params if p.requires_grad]
+            grads = torch.autograd.grad(anchor_nll, params, allow_unused=True)
+            for p, g in zip(params, grads):
+                if g is not None and p.grad is not None:
+                    p.grad.add_(g, alpha=float(hek_coef))
+            return float(anchor_nll.item())
+        except Exception:
+            return 0.0  # 锚定失败不影响主更新（与原路径同语义）
+
+    def set_bc_reference(self, state_dict) -> bool:
+        """M5.2-F6: 注入冻结的 BC 策略副本作为 KL 信任域参考。
+
+        在 BC 预训练后、PPO 微调前由 main.py 调用。副本独立于 self.ac，
+        不参与优化器、不接收梯度；未调用时 kl_bc 项严格无操作。
+        """
+        if self.kl_bc_coef <= 0.0 or state_dict is None:
+            return False
+        try:
+            ref = copy.deepcopy(self.ac)
+            ref.load_state_dict(state_dict)
+            for p in ref.parameters():
+                p.requires_grad_(False)
+            ref.eval()
+            self._bc_ac = ref
+            return True
+        except Exception:
+            self._bc_ac = None
+            return False
+
+    def _klbc_term(self, obs, actions, decoding_orders, bucket_indices,
+                   new_log_probs) -> torch.Tensor | None:
+        """M5.2-F6: 单样本 KL 估计 relu(mean(log π_BC − log π_θ))，带 π_θ 侧梯度。
+
+        动作来自 rollout 策略，故这是 KL 的有偏但标准估计（PPO approx_kl 同款）。
+        relu 的语义：π_θ 比 BC 更集中于所采动作（即在改进）时不罚；只有当 π_θ
+        在该状态上漂离 BC 盆地（log π_θ < log π_BC）才产生惩罚。
+        """
+        if self._bc_ac is None or self.kl_bc_coef <= 0.0:
+            return None
+        try:
+            with torch.no_grad():
+                if bucket_indices is not None:
+                    bc_lp, _, _, _ = self._bc_ac.evaluate_actions(
+                        obs, actions, decoding_orders, bucket_indices=bucket_indices
+                    )
+                else:
+                    bc_lp, _, _, _ = self._bc_ac.evaluate_actions(
+                        obs, actions, decoding_orders
+                    )
+            term = torch.relu(bc_lp.detach() - new_log_probs).mean()
+            if torch.isnan(term) or torch.isinf(term):
+                return None
+            return term
+        except Exception:
+            return None
+
+    def _trust_grad_into(self, actor_params, kl_term: torch.Tensor, coef: float) -> float:
+        """M5.2-F6: 把 coef × d(kl_term)/d(actor参数) 累加到 .grad（词典序路径专用）。
+
+        与 _anchor_grad_into 同语义：信任域是稳定器，不参与词典序零空间投影。
+        """
+        if kl_term is None or coef <= 0.0:
+            return 0.0
+        try:
+            params = [p for p in actor_params if p.requires_grad]
+            grads = torch.autograd.grad(kl_term, params, allow_unused=True)
+            for p, g in zip(params, grads):
+                if g is not None and p.grad is not None:
+                    p.grad.add_(g, alpha=float(coef))
+            return float(kl_term.item())
+        except Exception:
+            return 0.0
 
     def _apply_lexicographic_policy_grad(
         self,
@@ -409,13 +535,31 @@ class PPOTrainer:
         total_cost_value_loss = 0.0
         total_power_incentive_loss = 0.0
         total_hek_anchor_loss = 0.0
+        total_klbc_loss = 0.0
         total_c3po_loss = 0.0
         total_c3po_value_loss = 0.0
         total_entropy = 0.0
+        # M5.4 诊断：按 SNR band 拆分的熵累加（low<7.5 / mid 7.5-22.5 / high≥22.5 dB），
+        # 用于区分"批构成偏移"与"真 log_std 坍缩"（M5.3 暴露的测量缺陷）
+        ent_band_sum = [0.0, 0.0, 0.0]
+        ent_band_n = [0, 0, 0]
         total_clip_fraction = 0.0
         total_approx_kl = 0.0
         n_updates = 0
         early_stopped = False
+
+        # ---- M5-F2: critic 预热状态（SFTP，actor_warmup_updates=0 时恒 False）----
+        self._ft_update_count = int(getattr(self, "_ft_update_count", 0)) + 1
+        in_warmup = (
+            self.actor_warmup_updates > 0
+            and self._ft_update_count <= self.actor_warmup_updates
+        )
+
+        # ---- M5.4: 显式 lr 冻结触发（lr_freeze_update=0 时恒不触发）----
+        if (not self._lr_frozen and self.lr_freeze_update > 0
+                and self._ft_update_count >= self.lr_freeze_update):
+            self._lr_frozen = True
+            self._apply_lr()
 
         # ---- HEK-Lite: 衰减锚定（初始化层干预的微调阶段）----
         # 仅在 hek_enabled 且演示已缓存且仍处于预热期（_hek_updates <
@@ -576,6 +720,27 @@ class PPOTrainer:
                         obs, actions, decoding_orders
                     )
 
+                # M5.2-F6: KL-to-BC 信任域项（未启用/未注入参考时为 None，严格无操作）
+                klbc_term = self._klbc_term(
+                    obs, actions, decoding_orders,
+                    torch.from_numpy(bucket_indices).long().to(obs.device)
+                    if (self.use_bucket_experts and bucket_indices is not None) else None,
+                    new_log_probs,
+                )
+
+                # M5.4 诊断：按 SNR band 累加逐样本熵（no_grad，不参与梯度）
+                with torch.no_grad():
+                    snr_b = batch["snr_db"].detach().cpu().numpy()
+                    ent_b = entropy.detach().cpu().numpy()
+                    for k, m in enumerate((
+                        snr_b < 7.5,
+                        (snr_b >= 7.5) & (snr_b < 22.5),
+                        snr_b >= 22.5,
+                    )):
+                        if m.any():
+                            ent_band_sum[k] += float(ent_b[m].sum())
+                            ent_band_n[k] += int(m.sum())
+
                 # policy loss 用总 log_prob（连续 + PL）算 ratio，保证 PL 部分梯度正常反传
                 log_ratio = new_log_probs - old_log_probs
                 log_ratio = log_ratio.clamp(-20.0, 20.0)
@@ -601,9 +766,25 @@ class PPOTrainer:
 
                     # 2) actor 词典序投影梯度（按 SNR 桶）
                     actor_params = list(self.ac.actor_params()) + list(self.ac.log_std_params())
-                    policy_loss_sum, entropy_loss_sum = self._apply_lexicographic_policy_grad(
-                        batch, ratio, entropy, buffer, actor_params, ee_advantages=adv_eff
-                    )
+                    if in_warmup:
+                        # M5-F2: 预热期只训 critic——actor 梯度不计算不设置
+                        # （grad=None ⇒ Adam 跳过该参数组，参数与动量严格不动）
+                        policy_loss_sum, entropy_loss_sum = 0.0, 0.0
+                    else:
+                        policy_loss_sum, entropy_loss_sum = self._apply_lexicographic_policy_grad(
+                            batch, ratio, entropy, buffer, actor_params, ee_advantages=adv_eff
+                        )
+                        # M5-F0: 锚定梯度注入 lex 路径（M4 时此处缺失 →
+                        # BC 盆地自 update 1 起无保护漂移，见 M5 预注册法医结论）
+                        if hek_anchor_active:
+                            total_hek_anchor_loss += self._anchor_grad_into(
+                                actor_params, hek_coef, obs.shape[0]
+                            )
+                        # M5.2-F6: KL-to-BC 信任域梯度注入（同锚定语义，不参与投影）
+                        if klbc_term is not None:
+                            total_klbc_loss += self._trust_grad_into(
+                                actor_params, klbc_term, self.kl_bc_coef
+                            )
 
                     # 3) 裁剪 + 步进
                     nn.utils.clip_grad_norm_(self.ac.parameters(), self.max_grad_norm)
@@ -621,18 +802,25 @@ class PPOTrainer:
                     if use_cost:
                         adv_eff = adv_eff - float(lambda_scaled) * batch["cost_advantages"]
 
-                    surr1 = ratio * adv_eff
-                    surr2 = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_eff
-                    policy_loss = -torch.min(surr1, surr2).mean()
-
                     value_loss = nn.functional.mse_loss(values, returns)
                     batch_entropy_scale = batch["entropy_scale"]
                     entropy_loss = -(batch_entropy_scale * entropy).mean()
-                    loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
+                    if in_warmup:
+                        # M5-F2: 预热期只训 critic（policy/entropy 断开，anchor/PI 同理）
+                        loss = self.value_coef * value_loss
+                    else:
+                        surr1 = ratio * adv_eff
+                        surr2 = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_eff
+                        policy_loss = -torch.min(surr1, surr2).mean()
+                        loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
+                        # M5.2-F6: KL-to-BC 信任域惩罚（relu 语义：只罚漂离 BC，不罚改进）
+                        if klbc_term is not None:
+                            loss = loss + self.kl_bc_coef * klbc_term
+                            total_klbc_loss += float(klbc_term.item())
 
                     # PLPI: delivery-gated power incentive（直达梯度 bypass 噪声 throughput 梯度）
                     pi_loss = None
-                    if pi_coef > 0 and "pi_delivery" in batch:
+                    if not in_warmup and pi_coef > 0 and "pi_delivery" in batch:
                         dr = float(batch["pi_delivery"].mean().item())
                         if dr < pi_threshold:
                             deficit = (pi_threshold - dr) / max(pi_threshold, 1e-8)
@@ -667,7 +855,7 @@ class PPOTrainer:
 
                     # HEK-Lite: 衰减锚定损失（把 actor 锚在专家演示的高功率/
                     # 高交付盆地，防止 PPO 初期被拽回低功率吸引子）
-                    if hek_anchor_active:
+                    if hek_anchor_active and not in_warmup:
                         try:
                             n_hek = int(self.hek_obs.shape[0])
                             hidx = torch.randint(
@@ -700,7 +888,7 @@ class PPOTrainer:
                         nn.utils.clip_grad_norm_(self.cost_critic.parameters(), self.max_grad_norm)
                         self.cost_critic_optimizer.step()
 
-                    policy_loss_item = float(policy_loss.item())
+                    policy_loss_item = 0.0 if in_warmup else float(policy_loss.item())
                     entropy_item = float((-entropy_loss).item())
 
                 # KL 估计 / 早停 只用连续动作部分（PL 排列分布的 log_prob 量级大、方差高，
@@ -758,6 +946,14 @@ class PPOTrainer:
         self._hek_updates = int(getattr(self, "_hek_updates", 0)) + 1
 
         n_updates = max(n_updates, 1)
+        # M5.4 诊断：band 熵均值 + log_std 均值（后者与采样分布无关，是真坍缩判据）
+        ent_bands = [
+            (ent_band_sum[k] / ent_band_n[k]) if ent_band_n[k] else 0.0
+            for k in range(3)
+        ]
+        with torch.no_grad():
+            log_std_mean = float(torch.cat(
+                [p.detach().flatten() for p in self.ac.log_std_params()]).mean())
         # 桶专家模式下 group[0] 是冻结主干(lr=0)，专家头在 group[1]
         lr_actor_report = float(self.optimizer.param_groups[1]['lr']) if self.use_bucket_experts else float(self.optimizer.param_groups[0]['lr'])
         result = {
@@ -769,12 +965,20 @@ class PPOTrainer:
             'power_incentive_loss': total_power_incentive_loss / n_updates,
             'hek_anchor_loss': total_hek_anchor_loss / n_updates,
             'hek_coef': float(hek_coef) if hek_anchor_active else 0.0,
+            'kl_bc_loss': total_klbc_loss / n_updates,
+            'kl_bc_coef': float(self.kl_bc_coef) if self._bc_ac is not None else 0.0,
             'entropy': total_entropy / n_updates,
+            'entropy_lo': ent_bands[0],
+            'entropy_mid': ent_bands[1],
+            'entropy_hi': ent_bands[2],
+            'log_std_mean': log_std_mean,
+            'lr_frozen': float(self._lr_frozen),
             'clip_fraction': total_clip_fraction / n_updates,
             'approx_kl': total_approx_kl / n_updates,
             'early_stopped': float(early_stopped),
             'lr_actor': lr_actor_report,
             'kl_decay_factor': float(self._kl_decay_factor),
+            'in_warmup': float(in_warmup),
         }
         result.update(self._compute_expert_grad_norms())
         return result

@@ -373,6 +373,12 @@ class ConstraintConfig:
     solver_expert_anchor_coef: float = 0.2  # 锚定损失初始系数
     solver_expert_anchor_decay: float = 0.95  # 锚定系数逐 update 衰减
 
+    # M5-R1: ExIt 第二迭代——on-policy relabel 收集（DAgger 式协变量偏移校正）
+    # 首轮 BC 后，用学生策略（确定性 act）走轨迹、教师从学生状态逐槽打标，
+    # 二次 BC。mix_original=True 时与原始（教师轨迹）演示聚合后一起克隆
+    solver_expert_relabel: bool = False
+    solver_expert_mix_original: bool = True
+
     # CRPO-S: episode级原始目标切换。桶不可行时整段episode用排水盈余奖励(纯可行性目标)，
     # 桶可行时保持EE+Lagrangian现状；迟滞带防目标抖振。use_crpo_switch=False时行为与现状完全一致。
     use_crpo_switch: bool = True
@@ -432,6 +438,10 @@ class PPOConfig:
     lr_decay_final_ratio: float = 0.2
     kl_stop_lr_decay: float = 0.9
     kl_stop_streak_threshold: int = 3
+    # M5.4: 显式 lr 冻结点（update 计数）。冠军 Arm A 的冻结是 KL 衰减连乘触底
+    # lr_decay_final_ratio 的涌现结果（u100 起钉死），不可控不可消融；本旋钮显式化：
+    # 达到后 scale 恒等于 lr_decay_final_ratio。0=关（行为逐位不变）。
+    lr_freeze_update: int = 0
 
     hidden_dim: int = 256
     n_layers: int = 3
@@ -494,6 +504,11 @@ class PPOConfig:
     streak_cap: float = 4.0                  #  streak 倍增上限（封顶）
     fail_entropy_scale: float = 1.5          # 未达标点 episode 熵奖励放大基数 ent_base
     point_base_floor: float = 0.5            # 逐点均匀地板系数（实际=本值/n_points）
+    # M5.3: 逐点目标覆盖（7 值，与 _HM_TARGETS 同序 0/5/10/15/20/25/30dB）。
+    # 空 = 默认 SDMA 逐点 delivery。默认目标对"已全面超越 SDMA"的策略 shortfall
+    # 恒 0 ⇒ 挖掘机制失明（M5.2 终审：冠军 0dB 0.886 / 30dB 0.888 无人推）。
+    # 覆盖值应设为"策略自身弱点处的进取目标"，把曝光与熵激励定向过去。
+    hm_point_targets: tuple = ()
 
     # ---- 性能挂钩定向熵激励 ----
     entropy_performance_linked: bool = True  # 未达标点熵系数按 shortfall 动态调节
@@ -520,6 +535,26 @@ class PPOConfig:
     # 续训覆盖（从 iter-7 续训时降低 actor lr、收紧 clip 信任域）
     resume_lr_actor_scale: float = 1.0   # 续训时 actor lr *= 该值（建议 0.2~0.33）
     resume_clip_ratio: float = -1.0      # >0 时覆盖 clip_ratio（建议 0.05~0.1）
+
+    # ---- M5 SFTP: 安全微调协议（全默认关 = 官方口径零变化）----
+    # 根因见 .trellis/tasks/09-02-solver-expert/experiment-results.md M5 预注册：
+    # M4 锚定在词典序投影路径为死代码 + critic 冷启动 + log_std 高 lr + Meta 非平稳
+    actor_warmup_updates: int = 0     # F2: >0 时前 N 个 update 只训 critic（actor+log_std 梯度置零）
+    eval_guard_enable: bool = False   # F5: 训练中评估守卫（周期 mini-eval + 劣化回滚 + lr 减半）
+    eval_guard_every: int = 400       # 每多少 episode 触发一次守卫 mini-eval
+    eval_guard_episodes: int = 4      # 每个守卫 SNR 点的确定性评估 episode 数
+    eval_guard_margin: float = 0.02   # avg_deliv(守卫点) 低于 bc_init 参考此裕量即判劣化
+    eval_guard_max_halvings: int = 3  # 最多回滚+lr 减半次数，超过后冻结 actor（只训 critic/Meta）
+    eval_guard_lr_floor: float = 1e-5 # actor lr 减半的下限
+
+    # ---- M5.2: 显式信任域 + 守卫判据升级（全默认关 = 官方口径零变化）----
+    # 依据 M5.1 终审：Arm A 的增益来自 lr 下限把它冻在 BC 盆地附近（隐式信任域），
+    # 释放 lr（A3）反而在 25/30dB 深过载区丢回增益；A2 抬 lr 则间歇性失稳。
+    # 故 M5.2 把"离 BC 近"从"步长小"中解耦：lr 走正常退火，盆地约束改由显式项承担。
+    kl_bc_coef: float = 0.0        # F6: KL(π_θ‖π_BC) 信任域强度，>0 启用（需 BC 快照，见 main.py）
+    eval_guard_v2: bool = False    # F5b: ok 判据 = avg_deliv 门 AND 逐点门全过 AND 队列对照 bc 参考
+    eval_guard_queue_ratio: float = 1.1  # F5b(v2): avg_queue ≤ bc 参考均值 × 此值
+    eval_guard_snr_points: tuple = ()  # 守卫点集合；空 = 沿用旧三点 (0,5,30)
 
 
 @dataclass
@@ -560,6 +595,11 @@ class HierarchicalConfig:
 
     # 分组平衡正则（0 = 关闭）
     meta_balance_coef: float = 0.1
+
+    # M5-F4: Meta 冻结（微调稳定化）——前 N episode Meta 照常采样决策但不做
+    # 梯度更新（累积段丢弃），使 Worker 在 BC 演示同款 (α,g) 条件分布上稳定；
+    # 0 = 关闭（官方口径）
+    meta_freeze_episodes: int = 0
 
     # Meta reward 缩放（防止 meta value loss 爆炸；原始 reward 量级 ±50 → ±1）
     meta_reward_scale: float = 0.02

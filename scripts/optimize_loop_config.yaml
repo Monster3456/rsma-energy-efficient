@@ -84,8 +84,14 @@ escalation:
 # 起始基线
 # ============================================================
 baseline:
-  checkpoint: "logs/opt_best/best.pt"  # 从当前 best 继续
-  resume_mode: "partial"
+  # M5.1 终审（2026-09-08）后切换。原值 logs/opt_best/best.pt 实际不存在（该目录从未
+  # 生成），且 scripts/optimize_loop_state.json 亦不存在 ⇒ 本键即
+  # optimize_loop.py:124/2180/2317 的实际生效值，此前是悬空路径。
+  # 现指向 M5 冠军 = SFTP 安全微调 best_guard.pt（ep6901）：官方 score
+  # [7, 0.9519, -8.3971, 1.0804]，功率 13.84W < SDMA，ee_ratio 1.0804 > 1.05，
+  # 逐点门 + 全局门全部满足，项目历史最佳。M5.1 双臂（A2/A3）均未字典序超越，无更优候选。
+  checkpoint: "logs/m5_armA_sftp/checkpoints/best_guard.pt"
+  resume_mode: "partial"   # 注：此键在 optimize_loop.py 中未被引用（死配置项），保留原值
 
 # ============================================================
 # 回滚机制（创新失败时回滚到 best）

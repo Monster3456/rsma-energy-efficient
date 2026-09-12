@@ -632,3 +632,14 @@ E1/E2 官方评估出分并完成 M5.3 终审之后。若 E 证明挖掘有效 �
 - 配方：冠军基座 **−meta（单时间尺度） −solver-expert（无蒸馏） −guard**，余同（curltrac/mining/DGLCR/Lagrangian/DVQ），8000ep seed 42（`logs/b_ldptrlq_style/`）
 - 官方评估（`logs/_eval_ldptrlq_{best,final}.txt`）：**best [0, 0.7824, −18.4300, 0.6838]**、final [0, 0.7839, −17.6143, 0.6892]；功率 23.2/22.9W≈饱和；逐点 0dB 0.753 … 30dB 0.595，**低于 SDMA（mean 0.838）**
 - 结论：2025 族单时间尺度 Lyapunov-DPP RL 从零训练**无法解决本过载实例**；与 bc_init（纯蒸馏 7/7）对照 ⇒ **使能成分是专家初始化**，非奖励族/层次结构单独所致。已入论文 §V-E + 主图（LDPTRLQ 列）
+
+### Seed 带扩展预注册（n=5，2026-09-12 启动）
+
+- 目的：把冠军配方 seed 带从 n=3（42/43/44）扩到 n=5（+45/46），收紧 σ_seed 估计与
+  论文 CI 声称；**不改任何机制**，逐字冠军配方（v1 守卫口径，与 42-44 同）
+- 臂：`mAdjudS45` / `mAdjudS46`（8000ep, cuda, seed 45/46）；评估 4 检查点
+  （best_guard+final ×2，`logs/_mAdjud456_eval.ps1`）
+- 判定/读法（预注册）：仅更新描述统计（mean/SD/极差 of best_guard draws 与 finals）
+  与 Fig.1 包络；**不**据此改任何既有判决（M5.x 判负、上界结论均不动）；若 n=5 的
+  best_guard 极差 > 0.012（现 0.0105）则在论文中把 σ 声称改为 report range only
+- 结果待补

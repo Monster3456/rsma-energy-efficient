@@ -59,6 +59,11 @@ STYLE = {
     "SDMA": dict(color="#1f77b4", marker="s", lw=1.8, ms=6, ls="--", zorder=4),
     "NOMA": dict(color="#2ca02c", marker="^", lw=1.8, ms=6, ls="-.", zorder=3),
     "EqualPower": dict(color="#7f7f7f", marker="v", lw=1.8, ms=6, ls=":", zorder=2),
+    # extended (novel) comparators
+    "DiffOpt": dict(color="#9467bd", marker="D", lw=2.0, ms=6, ls="-", zorder=6),
+    "DiffOptCausal": dict(color="#e377c2", marker="d", lw=1.6, ms=5, ls=(0, (4, 2)), zorder=6),
+    "AdaptivePower": dict(color="#ff7f0e", marker="p", lw=1.6, ms=6, ls="--", zorder=2),
+    "WaterFilling": dict(color="#17becf", marker="h", lw=1.6, ms=6, ls=":", zorder=2),
 }
 
 
@@ -142,7 +147,8 @@ def plot_all(log: str, out: str) -> None:
     print(f"wrote {out}")
 
 
-def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str) -> None:
+def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str,
+                   extra_reports: list[str] | None = None) -> None:
     """6-panel figure: classical baselines + PPO-RSMA seed-replication band.
 
     Baselines (SDMA/NOMA/EqualPower) come from `baseline_log`; every `--ppp-report`
@@ -154,7 +160,14 @@ def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str) -> None:
         print("note: fewer than 2 PPO-RSMA reports given; band will collapse to a line")
 
     snrs_b, data_b = parse_overview(baseline_log)
-    algos = _present(data_b, "delivery_ratio")
+    for extra in extra_reports or []:
+        _, data_e = parse_overview(extra)
+        for algo, metrics in data_e.items():
+            data_b.setdefault(algo, metrics)
+        print(f"merged extra report: {extra}")
+    # ALGO_ORDER first, then any merged-in comparators, in insertion order
+    present = [a for a in data_b if any(v is not None for v in data_b[a].get("delivery_ratio", []))]
+    algos = [a for a in ALGO_ORDER if a in present] + [a for a in present if a not in ALGO_ORDER]
 
     members: list[tuple[str, list[float], dict[str, list[float | None]]]] = []
     for spec in ppp_reports:
@@ -277,13 +290,14 @@ def main(argv: list[str] | None = None) -> int:
     p_bb = sub.add_parser("seedband", help="baselines + PPO-RSMA seed-replication band")
     p_bb.add_argument("--baseline-log", required=True, help="eval report with baseline columns (SDMA/NOMA/EqualPower)")
     p_bb.add_argument("--ppp-report", action="append", required=True, help="TAG=PATH of a PPO-RSMA eval report, repeatable")
+    p_bb.add_argument("--extra-report", action="append", help="PATH of an additional eval report whose algorithm columns are merged into the figure, repeatable")
     p_bb.add_argument("--out", default="logs/figs/benchmarks_seed_band.png")
 
     args = ap.parse_args(argv)
     if args.mode == "all":
         plot_all(args.log, args.out)
     elif args.mode == "seedband":
-        plot_seed_band(args.baseline_log, args.ppp_report, args.out)
+        plot_seed_band(args.baseline_log, args.ppp_report, args.out, args.extra_report)
     else:
         plot_ablation(args.spec, args.metric, args.out)
     return 0

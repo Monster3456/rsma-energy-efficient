@@ -35,11 +35,17 @@ guard-selected checkpoints. On a 7-point SNR grid (0–30 dB, imperfect CSI, 50
 episodes/point), the resulting policy clears **all 7 per-point gates** with mean
 delivery $\approx 0.950 \pm 0.005$ across seed replications, and dominates SDMA,
 NOMA and equal-power baselines on delivery, queue and overflow at every SNR—at
-roughly half their transmit power (30 dB: 0.888 vs 0.664/0.581/0.601). A
-pre-registered fine-tuning campaign further shows that released-learning-rate,
-trust-region, anchoring, and data-reshaping variants all fall **within the
-policy's own seed dispersion**, motivating multi-seed confidence-interval
-comparison as the honest reporting standard for this class of methods.
+roughly half their transmit power (30 dB: 0.888 vs 0.664/0.581/0.601). We further
+show that the solver expert *itself*, run as a training-free per-slot optimizer,
+is the strongest controller on this grid (mean delivery 0.9574), establishing a
+model-based upper bound; distillation compresses it into a single-forward-pass
+policy (0.9441) and the frozen fine-tune recovers ≈59% of the compression gap
+(0.9519), so the learned policy's value is inference cost and model-free
+deployment rather than absolute performance. A pre-registered fine-tuning
+campaign shows that released-learning-rate, trust-region, anchoring, and
+data-reshaping variants all fall **within the policy's own seed dispersion**,
+motivating multi-seed confidence-interval comparison as the honest reporting
+standard for this class of methods.
 
 **Index Terms—** Rate-splitting multiple access, MU-MIMO uplink, energy
 efficiency, deep reinforcement learning, MMSE-SIC, Lyapunov optimization,
@@ -426,7 +432,42 @@ resolve onset effects above the noise floor.
 | M5.3 | E1: mining targets 0.92/0.93 | [7, 0.9474, …] | lose (target points regressed) |
 | M5.3 | E2: mining targets 0.95/0.95 | [7, 0.9471, …] | lose (mid-band regression) |
 
-### E. Checkpoint selection matters
+### E. The model-based per-slot optimization upper bound
+
+Table III adds the training-free comparators on the identical grid. Strikingly,
+**DiffOpt**—the differentiable MMSE-SIC engine run as a per-slot online optimizer
+(25 Adam steps on power logits + decoding-order selection, *no learned policy*)—
+**exceeds the champion policy at every SNR point** (mean delivery 0.9574 vs 0.9519,
++0.0055, outside the ±0.005 seed band; mean queue 7.36 vs 8.40) while clearing all
+7 gates. A causal variant whose surrogate uses only the estimated channel Ĥ
+matches the oracle-CSI variant point-for-point in smoke runs (30 dB: 0.8963 vs
+0.8962, 1 episode), so the advantage is **not** CSI leakage; full 50-episode
+confirmation of the causal variant is in progress. Classical adaptive-power and
+water-filling heuristics remain far below both (30 dB: 0.777/0.778).
+
+**TABLE III — Training-free comparators, per-point delivery (queue), 50 episodes/point.**
+
+| SNR (dB) | DiffOpt | DiffOpt (causal Ĥ) | AdaptivePower | WaterFilling | Champion (ref) |
+|---|---|---|---|---|---|
+| 0 | **0.894** (2.64) | pending | 0.845 (3.75) | 0.828 (4.12) | 0.886 (2.84) |
+| 5 | **0.990** (0.38) | pending | 0.981 (0.65) | 0.979 (0.69) | 0.989 (0.43) |
+| 10 | **0.994** (0.62) | pending | 0.988 (1.01) | 0.987 (1.07) | 0.993 (0.69) |
+| 15 | **0.992** (1.71) | pending | 0.971 (4.34) | 0.969 (4.60) | 0.991 (1.91) |
+| 20 | **0.978** (6.50) | pending | 0.915 (16.63) | 0.913 (16.65) | 0.974 (7.20) |
+| 25 | **0.949** (14.89) | pending | 0.844 (27.52) | 0.845 (27.33) | 0.942 (16.08) |
+| 30 | **0.905** (24.75) | pending | 0.777 (32.67) | 0.778 (32.63) | 0.888 (29.63) |
+
+This re-frames the contribution hierarchy honestly: the **differentiable engine +
+solver expert is itself the strongest controller on this grid**; behavior cloning
+compresses it into a single-forward-pass policy at a quantified cost
+(0.9574 → 0.9441), and SFTP fine-tuning recovers ≈59% of that compression gap
+(→ 0.9519). The learned policy's remaining value is **inference cost and
+model-free deployment** (one forward pass per slot vs 25 optimization steps with an
+explicit rate model), not absolute performance. Earlier "RL surpasses the teacher"
+wording is withdrawn: RL surpasses the *distilled student* (BC), not the live
+optimizer, which was never officially evaluated until now.
+
+### F. Checkpoint selection matters
 
 The seed-44 episode exposes a subtle evaluation pathology: a legacy 3-point
 mini-eval selected a checkpoint 0.9 pt below the same run's final model, because
@@ -449,6 +490,19 @@ shows the *difference* between frozen and released variants is within seed noise
 so the freeze should be described as a stabilizer of a seed-robust operating point,
 not as a proven causal lever; the pre-registered multi-seed response surface is the
 correct instrument to settle it.
+
+**The optimizer upper bound and what learning buys.** The training-free per-slot
+optimizer (DiffOpt) exceeding the learned policy at every point forces an honest
+account: in this environment, greedy model-based optimization with an accurate
+differentiable rate model is a stronger controller than any policy we trained, and
+the distillation+fine-tune pipeline is best understood as **compressing that
+optimizer into a fast, model-free policy** at a quantified cost (0.9574 → 0.9519,
+≈1.2% mean delivery) in exchange for single-forward-pass inference and no runtime
+dependence on the rate model. Two open questions follow: whether a *causal*
+(estimate-only) optimizer retains the full advantage (50-episode confirmation in
+progress; 1-episode smoke says yes), and whether the distillation gap can be
+closed by distilling the optimizer's queue-conditioned behavior rather than its
+marginal actions.
 
 **Statistical honesty as a contribution.** Single-seed RL comparisons at effect
 sizes $\sim 0.005$ are indistinguishable from seed noise in this problem. Our

@@ -58,13 +58,18 @@ class SolverExpert:
 
     def __init__(self, env, n_steps: int = 25, lr: float = 0.1,
                  order_candidates: Sequence[str] = ("gain_desc", "queue_last"),
-                 dtype: torch.dtype = torch.float64):
+                 dtype: torch.dtype = torch.float64,
+                 use_true_channel: bool = True):
+        """``use_true_channel=False`` 使 surrogate 仅用估计信道 Ĥ（declared 速率），
+        得到**因果**逐槽优化基线；默认 True 时 surrogate 的 outage 速率含真信道
+        H_true 项（oracle 上界，用于信息-gap 分析，不可作为因果对照）。"""
         self.env_ref = env
         self.K = int(env.K)
         self.n_steps = int(n_steps)
         self.lr = float(lr)
         self.order_candidates = tuple(order_candidates)
         self.dtype = dtype
+        self.use_true_channel = bool(use_true_channel)
         self.engine = DiffRSMAEngine(
             K=env.K, N_r=env.N_r, N_t=env.N_t,
             sigma2=env.rate_calc.sigma2, dtype=dtype,
@@ -123,7 +128,10 @@ class SolverExpert:
             "H_hat": torch.as_tensor(np.asarray(env._channel_obs["H_hat"]),
                                      dtype=self.engine.cdtype),
             "H_true": torch.as_tensor(np.asarray(env._channel_obs["H_true"]),
-                                      dtype=self.engine.cdtype),
+                                      dtype=self.engine.cdtype)
+            if self.use_true_channel
+            else torch.as_tensor(np.asarray(env._channel_obs["H_hat"]),
+                                 dtype=self.engine.cdtype),
             "eps": float(env._channel_obs.get("sigma_est", float(cfg_sys.epsilon_csi))),
             "split": torch.as_tensor(
                 np.clip(np.asarray(env.split_mask, dtype=np.float64), 0.0, 1.0),

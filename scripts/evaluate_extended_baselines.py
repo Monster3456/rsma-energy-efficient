@@ -10,7 +10,11 @@ Comparators:
   diffopt        per-slot model-based online optimization: the differentiable
                  MMSE-SIC shadow engine (SolverExpert) refines power logits and
                  picks the decoding order every slot, with NO learned policy.
-                 Isolates the value of learning vs per-slot optimization.
+                 NOTE: its surrogate sees the true channel (oracle CSI) -> a
+                 NON-CAUSAL upper bound, used for information-gap analysis.
+  diffopt_causal same per-slot optimizer but the surrogate uses ONLY the
+                 estimated channel H_hat (declared rates) -> the FAIR causal
+                 model-based comparator against the learned policy.
   adaptive_power repository adaptive-power heuristic (scripts/baselines/).
   water_filling  classical water-filling power allocation (subclass of adaptive).
 
@@ -41,14 +45,15 @@ from src.optimization.solver_expert import SolverExpert
 
 LABEL = {
     "diffopt": "DiffOpt",
+    "diffopt_causal": "DiffOptCausal",
     "adaptive_power": "AdaptivePower",
     "water_filling": "WaterFilling",
 }
 
 
-def make_diffopt_fn(env):
+def make_diffopt_fn(env, causal: bool = False):
     """Per-slot differentiable optimization; cold-start each slot (teacher mode)."""
-    expert = SolverExpert(env)
+    expert = SolverExpert(env, use_true_channel=not causal)
 
     def action_fn(obs, env):
         return expert.solve(env)["action"]
@@ -58,7 +63,9 @@ def make_diffopt_fn(env):
 
 def build_action_fn(name: str, cfg, env):
     if name == "diffopt":
-        return make_diffopt_fn(env)
+        return make_diffopt_fn(env, causal=False)
+    if name == "diffopt_causal":
+        return make_diffopt_fn(env, causal=True)
     if name == "adaptive_power":
         return make_baseline_action_fn(AdaptivePowerBaseline(cfg))
     if name == "water_filling":

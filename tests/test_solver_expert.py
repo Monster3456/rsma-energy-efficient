@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -177,3 +178,27 @@ class TestOptimization:
         assert np.all(cont <= ACT_BOUND + 1e-12)
         assert np.all(cont >= -ACT_BOUND - 1e-12)
         assert result["order"].shape == (env.K,)
+
+
+class TestCausalChannelFlag:
+    """use_true_channel=False 的 surrogate 必须只看估计信道（因果对照语义）。"""
+
+    def test_causal_state_replaces_true_with_hat(self):
+        env = _make_env(snr_db=15.0)
+        oracle = SolverExpert(env, n_steps=2)
+        causal = SolverExpert(env, n_steps=2, use_true_channel=False)
+        st_o = oracle._read_state(env)
+        st_c = causal._read_state(env)
+        # imperfect CSI 下 oracle 保留真信道且与估计不同
+        assert not torch.allclose(st_o["H_true"], st_o["H_hat"])
+        # causal 的 surrogate 真信道槽位被估计信道替换
+        assert torch.allclose(st_c["H_true"], st_c["H_hat"])
+        assert torch.allclose(st_c["H_hat"], st_o["H_hat"])
+
+    def test_causal_solve_returns_valid_action(self):
+        env = _make_env(snr_db=15.0)
+        _warmup(env, 10)
+        causal = SolverExpert(env, n_steps=3, use_true_channel=False)
+        result = causal.solve(env)
+        assert result["action"].shape == (4 * env.K,)
+        assert np.all(np.isfinite(result["cont_action"]))

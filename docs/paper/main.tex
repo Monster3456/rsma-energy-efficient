@@ -368,11 +368,14 @@ SNR (dB) & PPO-RSMA & SDMA & NOMA & EqualPower \\
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=\textwidth]{benchmarks_seed_band}
-\caption{Benchmark across algorithms with the PPO-RSMA seed-replication band
-(mean line and min--max envelope over seeds 42/43/44; faint member lines).
-PPO-RSMA dominates SDMA/NOMA/EqualPower on delivery, queue, overflow and EE at
-every SNR, at roughly half the transmit power of the fixed-power baselines.}
+\includegraphics[width=\textwidth]{benchmarks_master}
+\caption{Master benchmark: PPO-RSMA 3-seed mean with min--max envelope (faint
+member lines) against classical baselines (SDMA/NOMA/EqualPower) and the novel
+comparators (DiffOpt oracle and causal per-slot optimization, adaptive power,
+water filling) on delivery, queue, power, EE, overflow and sum rate. PPO-RSMA
+dominates the classical baselines at every SNR at roughly half their transmit
+power; the training-free per-slot optimizer (DiffOpt) traces the model-based
+upper bound just above the PPO band.}
 \label{fig:band}
 \end{figure*}
 

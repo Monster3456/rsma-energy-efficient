@@ -597,7 +597,9 @@ jointly refine the stream split.
     by designed training data," *IEEE Trans. Cogn. Commun. Netw.*, 2025
     (arXiv:2507.12630). *(journal extension of [5])*
 
-**Figures.** Fig. 1 = `docs/paper/figs/benchmarks_seed_band.png` (benchmark + seed
-band); Fig. 2 = `docs/paper/figs/ablation_delivery_seeds.png`
-(teacher→BC→champion→replications). LaTeX skeleton with these figures wired:
-`docs/paper/main.tex` (requires IEEEtran.cls to compile).
+**Figures.** Fig. 1 = `docs/paper/figs/benchmarks_master.png` (master benchmark:
+PPO seed band + classical baselines + novel comparators DiffOpt/DiffOptCausal/
+AdaptivePower/WaterFilling); Fig. 2 = `docs/paper/figs/ablation_delivery_seeds.png`
+(teacher→BC→champion→replications). Supplementary: `benchmarks_seed_band.png`.
+LaTeX skeleton with these figures wired: `docs/paper/main.tex` (requires
+IEEEtran.cls to compile).

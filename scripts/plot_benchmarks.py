@@ -64,6 +64,7 @@ STYLE = {
     "DiffOptCausal": dict(color="#e377c2", marker="d", lw=1.6, ms=5, ls=(0, (4, 2)), zorder=6),
     "AdaptivePower": dict(color="#ff7f0e", marker="p", lw=1.6, ms=6, ls="--", zorder=2),
     "WaterFilling": dict(color="#17becf", marker="h", lw=1.6, ms=6, ls=":", zorder=2),
+    "LDPTRLQ": dict(color="#8c564b", marker="X", lw=1.8, ms=6, ls="-.", zorder=3),
 }
 
 
@@ -161,7 +162,14 @@ def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str,
 
     snrs_b, data_b = parse_overview(baseline_log)
     for extra in extra_reports or []:
-        _, data_e = parse_overview(extra)
+        tag, sep, path = extra.partition("=")
+        if not sep:
+            path = extra
+        _, data_e = parse_overview(path)
+        if sep and "PPO-RSMA" in data_e:
+            # rename the evaluated-checkpoint column so trained baselines plot
+            # as their own curve instead of colliding with the champion column
+            data_e[tag] = data_e.pop("PPO-RSMA")
         for algo, metrics in data_e.items():
             data_b.setdefault(algo, metrics)
         print(f"merged extra report: {extra}")
@@ -290,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     p_bb = sub.add_parser("seedband", help="baselines + PPO-RSMA seed-replication band")
     p_bb.add_argument("--baseline-log", required=True, help="eval report with baseline columns (SDMA/NOMA/EqualPower)")
     p_bb.add_argument("--ppp-report", action="append", required=True, help="TAG=PATH of a PPO-RSMA eval report, repeatable")
-    p_bb.add_argument("--extra-report", action="append", help="PATH of an additional eval report whose algorithm columns are merged into the figure, repeatable")
+    p_bb.add_argument("--extra-report", action="append", help="PATH or TAG=PATH of an additional eval report merged into the figure; TAG=PATH renames its PPO-RSMA column to TAG (for trained baselines), repeatable")
     p_bb.add_argument("--out", default="logs/figs/benchmarks_seed_band.png")
 
     args = ap.parse_args(argv)

@@ -468,6 +468,15 @@ explicit rate model), not absolute performance. Earlier "RL surpasses the teache
 wording is withdrawn: RL surpasses the *distilled student* (BC), not the live
 optimizer, which was never officially evaluated until now.
 
+**Trained recent-family comparator.** A single-timescale Lyapunov
+drift-plus-penalty RL baseline in the LDPTRLQ family [7] (PPO with queue-Lyapunov
+penalties and the same curriculum/mining protocol, but no hierarchy, no
+distillation, no guard) clears **0/7 gates** (mean delivery 0.782, mean power
+23.2 W ≈ saturated; Fig. 1). Vanilla queue-Lyapunov RL therefore cannot solve this
+overloaded instance from scratch; together with bc_init (7/7 from pure
+distillation) this localizes the enabling ingredient to **expert initialization**,
+not to the reward family or the hierarchy alone.
+
 ### F. Checkpoint selection matters
 
 The seed-44 episode exposes a subtle evaluation pathology: a legacy 3-point

@@ -626,3 +626,9 @@ E1/E2 官方评估出分并完成 M5.3 终审之后。若 E 证明挖掘有效 �
 **在跑**：LDPTRLQ-style 对照臂（单时间尺度 Lyapunov-DPP RL，`--disable-meta`，
 8000ep 已收官 `logs/b_ldptrlq_style/`）官方评估 best/final 两检查点
 （`logs/_eval_ldptrlq_{best,final}.txt`，~2-3h）→ 出分后并入表 I/III。
+
+### LDPTRLQ-style 对照臂终审（2026-09-12）：0/7 门，全面崩溃
+
+- 配方：冠军基座 **−meta（单时间尺度） −solver-expert（无蒸馏） −guard**，余同（curltrac/mining/DGLCR/Lagrangian/DVQ），8000ep seed 42（`logs/b_ldptrlq_style/`）
+- 官方评估（`logs/_eval_ldptrlq_{best,final}.txt`）：**best [0, 0.7824, −18.4300, 0.6838]**、final [0, 0.7839, −17.6143, 0.6892]；功率 23.2/22.9W≈饱和；逐点 0dB 0.753 … 30dB 0.595，**低于 SDMA（mean 0.838）**
+- 结论：2025 族单时间尺度 Lyapunov-DPP RL 从零训练**无法解决本过载实例**；与 bc_init（纯蒸馏 7/7）对照 ⇒ **使能成分是专家初始化**，非奖励族/层次结构单独所致。已入论文 §V-E + 主图（LDPTRLQ 列）

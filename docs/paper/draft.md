@@ -440,22 +440,23 @@ Table III adds the training-free comparators on the identical grid. Strikingly,
 **exceeds the champion policy at every SNR point** (mean delivery 0.9574 vs 0.9519,
 +0.0055, outside the ±0.005 seed band; mean queue 7.36 vs 8.40) while clearing all
 7 gates. A causal variant whose surrogate uses only the estimated channel Ĥ
-matches the oracle-CSI variant point-for-point in smoke runs (30 dB: 0.8963 vs
-0.8962, 1 episode), so the advantage is **not** CSI leakage; full 50-episode
-confirmation of the causal variant is in progress. Classical adaptive-power and
-water-filling heuristics remain far below both (30 dB: 0.777/0.778).
+**matches the oracle-CSI variant point-for-point at 50 episodes** (max |Δ| ≤ 0.001
+per point), so the advantage is **not** CSI leakage: even a fair, causal,
+training-free per-slot optimizer dominates the learned policy on this grid.
+Classical adaptive-power and water-filling heuristics remain far below both
+(30 dB: 0.777/0.778).
 
 **TABLE III — Training-free comparators, per-point delivery (queue), 50 episodes/point.**
 
 | SNR (dB) | DiffOpt | DiffOpt (causal Ĥ) | AdaptivePower | WaterFilling | Champion (ref) |
 |---|---|---|---|---|---|
-| 0 | **0.894** (2.64) | pending | 0.845 (3.75) | 0.828 (4.12) | 0.886 (2.84) |
-| 5 | **0.990** (0.38) | pending | 0.981 (0.65) | 0.979 (0.69) | 0.989 (0.43) |
-| 10 | **0.994** (0.62) | pending | 0.988 (1.01) | 0.987 (1.07) | 0.993 (0.69) |
-| 15 | **0.992** (1.71) | pending | 0.971 (4.34) | 0.969 (4.60) | 0.991 (1.91) |
-| 20 | **0.978** (6.50) | pending | 0.915 (16.63) | 0.913 (16.65) | 0.974 (7.20) |
-| 25 | **0.949** (14.89) | pending | 0.844 (27.52) | 0.845 (27.33) | 0.942 (16.08) |
-| 30 | **0.905** (24.75) | pending | 0.777 (32.67) | 0.778 (32.63) | 0.888 (29.63) |
+| 0 | **0.894** (2.64) | 0.894 (2.64) | 0.845 (3.75) | 0.828 (4.12) | 0.886 (2.84) |
+| 5 | **0.990** (0.38) | 0.990 (0.38) | 0.981 (0.65) | 0.979 (0.69) | 0.989 (0.43) |
+| 10 | **0.994** (0.62) | 0.994 (0.62) | 0.988 (1.01) | 0.987 (1.07) | 0.993 (0.69) |
+| 15 | **0.992** (1.71) | 0.992 (1.71) | 0.971 (4.34) | 0.969 (4.60) | 0.991 (1.91) |
+| 20 | **0.978** (6.50) | 0.978 (6.49) | 0.915 (16.63) | 0.913 (16.65) | 0.974 (7.20) |
+| 25 | **0.949** (14.89) | 0.949 (14.88) | 0.844 (27.52) | 0.845 (27.33) | 0.942 (16.08) |
+| 30 | **0.905** (24.75) | 0.905 (24.74) | 0.777 (32.67) | 0.778 (32.63) | 0.888 (29.63) |
 
 This re-frames the contribution hierarchy honestly: the **differentiable engine +
 solver expert is itself the strongest controller on this grid**; behavior cloning
@@ -498,11 +499,11 @@ differentiable rate model is a stronger controller than any policy we trained, a
 the distillation+fine-tune pipeline is best understood as **compressing that
 optimizer into a fast, model-free policy** at a quantified cost (0.9574 → 0.9519,
 ≈1.2% mean delivery) in exchange for single-forward-pass inference and no runtime
-dependence on the rate model. Two open questions follow: whether a *causal*
-(estimate-only) optimizer retains the full advantage (50-episode confirmation in
-progress; 1-episode smoke says yes), and whether the distillation gap can be
-closed by distilling the optimizer's queue-conditioned behavior rather than its
-marginal actions.
+dependence on the rate model. The causal (estimate-only) variant retains the full
+advantage at 50 episodes, so the upper bound holds for fair causal controllers;
+the remaining open question is whether the distillation gap can be closed by
+distilling the optimizer's queue-conditioned behavior rather than its marginal
+actions.
 
 **Statistical honesty as a contribution.** Single-seed RL comparisons at effect
 sizes $\sim 0.005$ are indistinguishable from seed noise in this problem. Our

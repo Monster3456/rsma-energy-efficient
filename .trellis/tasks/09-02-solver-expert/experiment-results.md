@@ -602,3 +602,27 @@ E1/E2 官方评估出分并完成 M5.3 终审之后。若 E 证明挖掘有效 �
 ### 点火
 
 `logs/_m54_launch.ps1 -seed 43`（之后 44、45）→ 每波 ~10h → 收尾评估脚本 `logs/_m54_eval.ps1`。监视 `LS=` / `FZ`（冻结位点与 onset 值对齐）、守卫 v2 六点判定。
+
+---
+
+## 扩展对照评估终审（2026-09-12）：免训练逐槽优化 = 本网格新上界
+
+官方口径 7点×50ep（`logs/_eval_extended.txt` / `_eval_extended_causal.txt`，脚本
+`scripts/evaluate_extended_baselines.py`，仅 import 不可变评估脚本）：
+
+| 对照 | mean deliv | 30dB deliv(Q) | 备注 |
+|---|---|---|---|
+| **DiffOpt**（oracle 逐槽可微优化） | **0.9574** | 0.905 (24.75) | 7/7 门全过；逐点超冠军 |
+| **DiffOptCausal**（仅 Ĥ，因果公平） | **0.9574** | 0.905 (24.74) | 与 oracle 逐点 |Δ|≤0.001 ⇒ 优势非 CSI 泄漏 |
+| 冠军 A/best_guard | 0.9519 | 0.888 (29.63) | 被逐点超越 |
+| AdaptivePower / WaterFilling | ~0.905 / ~0.905 | 0.777 / 0.778 | 远低于两者 |
+
+**结论（叙事重定位，已入论文 draft/main.tex §V-E+§VI）**：可微引擎+solver expert
+本身是本网格最强控制器（模型上界）；BC+SFTP = 将其压缩为单前向快速策略
+（0.9574→0.9441→0.9519，收复 ~59% 压缩 gap）；学习策略的剩余价值 = 推理成本与
+免模型部署。**"RL 超越教师"措辞撤回**（RL 超的是 BC 学生；活优化器此前从未官方评估）。
+因果开关 `SolverExpert(use_true_channel=False)` + 2 测试（门禁 345）。
+
+**在跑**：LDPTRLQ-style 对照臂（单时间尺度 Lyapunov-DPP RL，`--disable-meta`，
+8000ep 已收官 `logs/b_ldptrlq_style/`）官方评估 best/final 两检查点
+（`logs/_eval_ldptrlq_{best,final}.txt`，~2-3h）→ 出分后并入表 I/III。

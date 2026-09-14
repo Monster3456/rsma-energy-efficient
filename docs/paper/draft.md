@@ -33,7 +33,7 @@ power logits online and supplies demonstrations; the policy is then distilled by
 behavior cloning and fine-tuned with a **stepwise-frozen protocol (SFTP)** with
 guard-selected checkpoints. On a 7-point SNR grid (0–30 dB, imperfect CSI, 50
 episodes/point), the resulting policy clears **all 7 per-point gates** with mean
-delivery $\approx 0.950 \pm 0.005$ across seed replications, and dominates SDMA,
+delivery $0.9496 \pm 0.0047$ across five seed replications, and dominates SDMA,
 NOMA and equal-power baselines on delivery, queue and overflow at every SNR—at
 roughly half their transmit power (30 dB: 0.888 vs 0.664/0.581/0.601). We further
 show that the solver expert *itself*, run as a training-free per-slot optimizer,
@@ -346,9 +346,22 @@ arrivals; 3 QoS classes.
 
 **Evaluation.** Official sweep over $\mathcal{S}=\{0,5,10,15,20,25,30\}$ dB, 50
 episodes per point, imperfect CSI; per-point gates and lexicographic score as in
-§II-E. Baselines: SDMA (no splitting), NOMA, equal-power. Every reported score is
-produced by the same immutable evaluation script; checkpoints are selected by the
-guard and re-evaluated officially.
+§II-E. Every reported score is produced by the same immutable evaluation script;
+checkpoints are selected by the guard and re-evaluated officially. Fig. 1 shows
+the seed-replication band (mean and min–max envelope over seeds 42–46; faint
+member lines).
+
+**Comparator set (classical + recent).** Beyond classical SDMA / NOMA /
+equal-power, we compare against four **recent (2025–2026) algorithms**
+re-implemented in the identical environment and protocol: (i) **LDPTRLQ-style**
+single-timescale Lyapunov drift-plus-penalty RL [7]; (ii) **DR-SAC** [16] and
+(iii) **neural-DPP** [17] as distributionally-robust / learned-DPP references
+(related-work level; faithful re-implementation of their mixed discrete-continuous
+action spaces is out of scope); (iv) **DiffOpt**, a training-free model-based
+comparator running the differentiable MMSE-SIC shadow engine as a per-slot online
+optimizer (oracle and causal variants), isolating learning from per-slot
+optimization. The repository's adaptive-power and water-filling heuristics are
+additional non-learned references (`scripts/evaluate_extended_baselines.py`).
 
 **Replication and pre-registration.** The champion configuration is replicated
 verbatim at seeds 43 and 44 (in addition to seed 42). All fine-tuning variants
@@ -365,7 +378,7 @@ changes. Seed dispersion is reported alongside every comparison.
 Table I reports per-point delivery ratio (and, parenthetically, transmit power in
 W and mean queue) for the champion policy and the three baselines; Fig. 1 shows
 the same comparison as curves with the **seed-replication band** (mean and min-max
-envelope over seeds 42/43/44).
+envelope over seeds 42–46).
 
 **TABLE I — Per-point delivery ratio / power (W) / queue, 50 episodes/point, imperfect CSI.**
 
@@ -396,14 +409,19 @@ monotone-safe refinement of the distilled basin (Fig. 2).
 
 ### C. Seed replication and the intrinsic noise floor
 
-Verbatim replication of the champion recipe at seeds 43/44 yields best-guard scores
-$[7, 0.9503, -8.4214, 1.0757]$ and finals $[7, 0.9496, \dots]$, $[7, 0.9491, \dots]$;
-the seed-44 best-guard ($0.9414$) is a **checkpoint-selection artifact** of the
-legacy 3-point mini-eval (its own final is $0.9491$). The recipe therefore centers
-at $\approx 0.950$ with $\sigma_{\rm seed}\approx 0.004$–$0.005$. Two consequences:
-(i) the champion value is *reproducible within* $\pm 0.002$ (seed 43) but is not a
-rigid fixed point (seed 44 has a low tail); (ii) any comparison whose margin is
-$\lesssim 0.005$ is **below seed resolution** at single-seed sample sizes.
+Verbatim replication of the champion recipe at seeds 43–46 yields best-guard
+deliveries $\{0.9503, 0.9414, 0.9519, 0.9526\}$; together with the champion
+(0.9519) the five draws give mean $0.9496$, sd $0.0047$, range $0.0112$ (the
+pre-registered downgrade trigger, range $>0.012$, is not met). The seed-44
+best-guard ($0.9414$) is a **checkpoint-selection artifact** of the legacy 3-point
+mini-eval (its own final is $0.9491$); seed 46's draw (0.9526) is statistically
+equivalent to the champion (Δ0.0007). End-of-training snapshots are markedly less
+stable than guard-selected checkpoints (finals n=4: mean 0.9362, sd 0.0200, vs
+best-guard sd 0.0047), retrospectively validating guard-based selection as the
+delivery artifact. Two consequences: (i) the recipe centers at
+$0.9496 \pm 0.0047$ and the champion is one draw from that band, reproducible
+within $\pm 0.002$; (ii) any comparison whose margin is $\lesssim 0.005$ is
+**below seed resolution** at single-seed sample sizes.
 
 ### D. Pre-registered fine-tuning campaign: all variants within the noise band
 

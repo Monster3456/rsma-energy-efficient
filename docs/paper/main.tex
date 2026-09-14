@@ -51,7 +51,7 @@ refines power logits online and supplies demonstrations; the policy is distilled
 by behavior cloning and fine-tuned with a stepwise-frozen protocol (SFTP) with
 guard-selected checkpoints. On a 7-point SNR grid (0--30\,dB, imperfect CSI, 50
 episodes/point), the policy clears all 7 per-point gates with mean delivery
-$\approx 0.950 \pm 0.005$ across seed replications and dominates SDMA, NOMA and
+$0.9496 \pm 0.0047$ across five seed replications and dominates SDMA, NOMA and
 equal-power baselines on delivery, queue and overflow at every SNR---at roughly
 half their transmit power (30\,dB: 0.888 vs.\ 0.664/0.581/0.601). We further show
 that the solver expert \emph{itself}, run as a training-free per-slot optimizer, is
@@ -340,7 +340,7 @@ dispersion is reported alongside every comparison.
 \subsection{Full-grid benchmark against classical baselines}
 Table~\ref{tab:bench} reports per-point delivery ratio (transmit power and mean
 queue parenthetically); Fig.~\ref{fig:band} shows the comparison as curves with
-the seed-replication band (mean and min--max envelope over seeds 42/43/44). The
+the seed-replication band (mean and min--max envelope over seeds 42--46). The
 policy clears all 7 per-point gates with score
 $[7,\,0.9519,\,-8.3971,\,1.0804]$: mean power 13.84\,W ($<$ SDMA) and aggregate EE
 ratio 1.0804 ($>1.05$). The advantage is largest in the deep-overload high-SNR
@@ -369,7 +369,7 @@ SNR (dB) & PPO-RSMA & SDMA & NOMA & EqualPower \\
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{benchmarks_master}
-\caption{Master benchmark: PPO-RSMA 3-seed mean with min--max envelope (faint
+\caption{Master benchmark: PPO-RSMA 5-seed mean with min--max envelope (faint
 member lines) against classical baselines (SDMA/NOMA/EqualPower) and the novel
 comparators (DiffOpt oracle and causal per-slot optimization, adaptive power,
 water filling) on delivery, queue, power, EE, overflow and sum rate. PPO-RSMA
@@ -396,21 +396,25 @@ champion, confirming reproducibility within $\pm0.002$ at seed 43.}
 \end{figure}
 
 \subsection{Seed replication and the intrinsic noise floor}
-Verbatim replication at seeds 43/44 yields best-guard scores
-$[7,0.9503,-8.4214,1.0757]$ and finals $[7,0.9496,\dots]$, $[7,0.9491,\dots]$; the
-seed-44 best-guard ($0.9414$) is a checkpoint-selection artifact of the legacy
-3-point mini-eval (its own final is $0.9491$). The recipe centers at
-$\approx0.950$ with $\sigma_{\rm seed}\approx0.004$--$0.005$. Hence (i) the
-champion is reproducible within $\pm0.002$ (seed 43) but not a rigid fixed point;
-(ii) any comparison with margin $\lesssim0.005$ is below seed resolution at
-single-seed sample sizes.
+Verbatim replication at seeds 43--46 yields best-guard deliveries
+$\{0.9503, 0.9414, 0.9519, 0.9526\}$; with the champion (0.9519) the five draws
+give mean $0.9496$, sd $0.0047$, range $0.0112$ (the pre-registered downgrade
+trigger, range $>0.012$, is not met). The seed-44 best-guard ($0.9414$) is a
+checkpoint-selection artifact of the legacy 3-point mini-eval (its own final is
+$0.9491$); seed 46's draw (0.9526) is statistically equivalent to the champion
+($\Delta0.0007$). End-of-training snapshots are markedly less stable than
+guard-selected checkpoints (finals n=4: mean 0.9362, sd 0.0200, vs best-guard sd
+0.0047), retrospectively validating guard-based selection as the delivery
+artifact. Hence (i) the recipe centers at $0.9496\pm0.0047$ and the champion is
+one draw from that band, reproducible within $\pm0.002$; (ii) any comparison with
+margin $\lesssim0.005$ is below seed resolution at single-seed sample sizes.
 
 \subsection{Pre-registered fine-tuning campaign}
 Five single-variable perturbations (Table~\ref{tab:campaign}) all score
 0.9446--0.9474 mean delivery---inside the champion's own seed band. The M5.3 arms
 additionally show their intended weak points \emph{not} improving (E1: 0\,dB 0.876,
 30\,dB 0.881, both below champion). We therefore report the fine-tune protocol's
-contribution as a seed-robust $\approx0.950\pm0.005$ operating point and decline
+contribution as a seed-robust $0.9496\pm0.0047$ operating point and decline
 causal claims for individual mechanisms at present sample sizes; the pre-registered
 follow-on (3 freeze-onsets $\times$ 3 seeds) is the design that could resolve
 onset effects above the noise floor.

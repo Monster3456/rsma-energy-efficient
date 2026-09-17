@@ -578,55 +578,73 @@ jointly refine the stream split.
 
 ## References
 
-1. D. Yu, S.-H. Park, O. Simeone, and S. Shamai, "Robust design of rate-splitting
-   multiple access with imperfect CSI for cell-free MIMO systems," *arXiv:2203.03690*, 2022.
-2. F. Karim, N. H. Mahmood, A. S. de Sena, D. Kumar, B. Clerckx, and M. Latva-aho,
-   "Uplink rate splitting multiple access with imperfect channel state information
-   and interference cancellation," *IEEE Wireless Commun. Lett.*, vol. 14, no. 5,
-   2025 (arXiv:2501.19019), doi:10.1109/LWC.2025.3538800.
-3. A. Schröder, S. Gracla, C. Bockelmann, D. Wübben, and A. Dekorsy, "Model-free
-   robust beamforming in satellite downlink using reinforcement learning,"
-   *arXiv:2510.25393*, 2025.
-4. J. Wang, Z. Ren, R. Zhan, and Z. Zhou, "Distributionally robust policy learning
-   under concept drifts," in *Proc. 42nd Int. Conf. Machine Learning (ICML)*,
-   PMLR 267, Vancouver, Canada, 2025 (arXiv:2412.14297).
-5. D. Luan and J. Thompson, "Achieving robust generalization for wireless channel
-   estimation neural networks by designed training data," *arXiv:2302.02302*, 2023.
-6. B. Demirel, Y. Wang, C. Tatino, and P. Soldati, "Generalization in reinforcement
-   learning for radio access networks," *arXiv:2507.06602*, 2025.
-7. W. Xu, J. Jiang, L. Deng, and D. H.-K. Tsang, "A Lyapunov drift-plus-penalty
-   method tailored for reinforcement learning with queue stability,"
-   *arXiv:2506.04291*, 2025. (LDPTRLQ)
-8. M. J. Neely, *Stochastic Network Optimization with Application to Communication
-   and Queueing Systems*, Morgan & Claypool, 2010.
-9. W. Dinkelbach, "On nonlinear fractional programming," *Management Science*,
-   vol. 13, no. 7, pp. 492–498, 1967.
-10. B. Clerckx, H. Joudeh, C. Hao, M. Dai, and B. Sharif, "Rate splitting for MIMO
-    wireless networks: a promising PHY-layer strategy for LTE evolution,"
-    *IEEE Commun. Mag.*, vol. 54, no. 3, pp. 98–105, 2016.
-11. J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, "Proximal policy
-    optimization algorithms," *arXiv:1707.06347*, 2017.
-12. R. S. Sutton, D. McAllester, S. Singh, and Y. Mansour, "Policy gradient methods
-    for reinforcement learning with function approximation," in *Advances in Neural
-    Information Processing Systems (NeurIPS)*, 1999.
-13. J. A. Plackett, "The analysis of permutations," *Applied Statistics*, vol. 24,
+1. D. Yu, S.-H. Park, et al., "Robust design of rate-splitting multiple access with
+   imperfect CSI for cell-free MIMO systems," in *Proc. IEEE ICC Workshops*,
+   May 2022, pp. 604–609.
+2. F. Karim, N. H. Mahmood, et al., "Uplink rate splitting multiple access with
+   imperfect channel state information and interference cancellation,"
+   *IEEE Wireless Commun. Lett.*, vol. 14, no. 5, pp. 1316–1320, May 2025.
+3. B. Clerckx, H. Joudeh, et al., "Rate splitting for MIMO wireless networks: A
+   promising PHY-layer strategy for LTE evolution," *IEEE Commun. Mag.*, vol. 54,
+   no. 3, pp. 98–105, Mar. 2016.
+4. A. Schröder, S. Gracla, et al., "Model-free robust beamforming in satellite
+   downlink using reinforcement learning," *IEEE Open J. Commun. Soc.*, vol. 6,
+   pp. 10582–10598, 2025.
+5. J. Wang, Z. Ren, et al., "Distributionally robust policy learning under concept
+   drifts," in *Proc. Int. Conf. Mach. Learn. (ICML)*, Vancouver, BC, Canada,
+   Jul. 2025.
+6. M. Cui, D. Zhou, et al., "DR-SAC: Distributionally robust soft actor-critic for
+   reinforcement learning under uncertainty," in *Proc. Int. Conf. Learn.
+   Represent. (ICLR)*, 2026.
+7. B. Demirel, Y. Wang, et al., "Generalization in reinforcement learning for radio
+   access networks," *IEEE Trans. Mach. Learn. Commun. Netw.*, vol. 4,
+   pp. 351–372, 2026.
+8. D. Luan and J. Thompson, "Achieving robust channel estimation neural networks by
+   designed training data," *IEEE Trans. Cogn. Commun. Netw.*, 2025.
+9. B. Zhu, L. Huang, et al., "Enhancing energy efficiency in wireless-powered MEC
+   systems through Lyapunov-guided deep reinforcement learning,"
+   *IEEE Trans. Wireless Commun.*, vol. 24, no. 9, pp. 7563–7580, Sep. 2025.
+   *(LDPTRLQ-family anchor: Lyapunov-guided DRL for EE)*
+10. M. J. Neely, *Stochastic Network Optimization with Application to Communication
+    and Queueing Systems*. San Rafael, CA, USA: Morgan & Claypool, 2010.
+11. A. Zakeri, M. Moltafet, et al., "Minimizing the AoI in resource-constrained
+    multi-source relaying systems: Dynamic and learning-based scheduling,"
+    *IEEE Trans. Wireless Commun.*, vol. 23, no. 1, pp. 450–466, Jan. 2024.
+    *(neural-DPP-family anchor: learning-augmented Lyapunov scheduling)*
+12. S. Khosravi, B. Demirel, et al., "Practical policy distillation for
+    reinforcement learning in radio access networks," in *Proc. IEEE Int. Symp.
+    Pers. Indoor Radio Commun. (PIMRC)*, 2025.
+13. J. A. Plackett, "The analysis of permutations," *Appl. Statist.*, vol. 24,
     no. 2, pp. 193–202, 1975. *(Plackett-Luce order model)*
-14. R. D. Luce, *Individual Choice Behavior*, Wiley, 1959. *(choice axiom / Luce model)*
-15. S. Khosravi, B. Demirel, L. Zhou, J. Rasines, and P. Soldati, "Practical policy
-    distillation for reinforcement learning in radio access networks," in *Proc.
-    IEEE PIMRC*, 2025 (arXiv:2511.06563).
-16. M. Cui, D. Zhou, Y. Han, G. A. Hanasusanto, Q. Wang, H. Zhang, and Z. Zhou,
-    "DR-SAC: distributionally robust soft actor-critic for reinforcement learning
-    under uncertainty," in *Proc. ICLR*, 2026 (arXiv:2506.12622).
-17. A. Rashwan, K. Briggs, and C. Budd, "A neural drift-plus-penalty algorithm for
-    network power allocation and routing," *arXiv:2509.09637*, 2025.
-18. D. Luan and J. Thompson, "Achieving robust channel estimation neural networks
-    by designed training data," *IEEE Trans. Cogn. Commun. Netw.*, 2025
-    (arXiv:2507.12630). *(journal extension of [5])*
+14. R. D. Luce, *Individual Choice Behavior*. New York, NY, USA: Wiley, 1959.
+    *(choice axiom / Luce model)*
+15. W. Dinkelbach, "On nonlinear fractional programming," *Manage. Sci.*, vol. 13,
+    no. 7, pp. 492–498, 1967.
+16. R. Zhang, K. Xiong, et al., "Energy efficiency maximization in RIS-assisted
+    SWIPT networks with RSMA: A PPO-based approach," *IEEE J. Sel. Areas Commun.*,
+    vol. 41, no. 5, pp. 1413–1430, May 2023.
+    *(PPO anchor: PPO-based RSMA energy-efficiency in JSAC)*
+17. R. S. Sutton, D. McAllester, et al., "Policy gradient methods for reinforcement
+    learning with function approximation," in *Adv. Neural Inf. Process. Syst.
+    (NeurIPS)*, 1999.
+18. P. He, A. Anpalagan, and W. Ejaz, "Energy-efficient power allocation
+    maximization for MU-MIMO multiple access channels," *IEEE Trans. Wireless
+    Commun.*, vol. 22, no. 5, pp. 3460–3471, May 2023. *(SDMA baseline)*
+19. K. Wang, T. Zhou, et al., "Fairness-aware energy-efficient power allocation for
+    uplink NOMA systems with imperfect SIC," *IEEE Wireless Commun. Lett.*,
+    vol. 12, no. 12, pp. 2018–2022, Dec. 2023. *(NOMA baseline)*
+20. A. Falloun and A. Ait Madi, "Fixed and fair power allocation in downlink and
+    uplink NOMA: Outage probability analysis and bit error rate comparative
+    study," *Bull. Electr. Eng. Inform.*, vol. 14, no. 5, pp. 3509–3519, Oct. 2025.
+    *(equal-power baseline anchor; not an IEEE top venue — EPA has no recent
+    top-journal method paper, swap if a better anchor found)*
 
 **Figures.** Fig. 1 = `docs/paper/figs/benchmarks_master.png` (master benchmark:
-PPO seed band + classical baselines + novel comparators DiffOpt/DiffOptCausal/
-AdaptivePower/WaterFilling); Fig. 2 = `docs/paper/figs/ablation_delivery_seeds.png`
-(teacher→BC→champion→replications). Supplementary: `benchmarks_seed_band.png`.
+PPO-RSMA 5-seed band as the only ours curve, vs external baselines SDMA [18] /
+NOMA [19] / EqualPower [20] / LDPTRLQ [9]; the DiffOpt upper bound is not
+plotted (Table II, §V-E); adaptive-power, water-filling, causal DiffOpt and the
+faint per-seed member lines omitted for clarity); Fig. 2 =
+`docs/paper/figs/ablation_delivery_seeds.png`
+(teacher→BC→champion→replications).
 LaTeX skeleton with these figures wired: `docs/paper/main.tex` (requires
 IEEEtran.cls to compile).

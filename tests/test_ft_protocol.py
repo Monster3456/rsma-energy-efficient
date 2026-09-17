@@ -592,3 +592,105 @@ class TestLRFreezeAndDiagnostics:
             expect = float(torch.cat(
                 [p.flatten() for p in ac.log_std_params()]).mean())
         assert info["log_std_mean"] == pytest.approx(expect, abs=1e-6)
+
+
+class TestResumeOptimizerCompatibility:
+    """Fix#2: param 组结构变化时 resume 的 optimizer.load_state_dict 安全降级。"""
+
+    def test_same_layout_compatible(self):
+        from src.training.main import _optimizer_state_compatible
+        model = torch.nn.Linear(3, 2)
+        opt1 = torch.optim.Adam(model.parameters(), lr=0.01)
+        opt2 = torch.optim.Adam(model.parameters(), lr=0.01)
+        assert _optimizer_state_compatible(opt2, opt1.state_dict()) is True
+
+    def test_group_count_mismatch_incompatible(self):
+        from src.training.main import _optimizer_state_compatible
+        extra = torch.nn.Parameter(torch.zeros(1))
+        model = torch.nn.Linear(3, 2)
+        opt1 = torch.optim.Adam([
+            {"params": model.parameters(), "lr": 1e-3},
+            {"params": [extra], "lr": 1e-4},
+        ])
+        opt2 = torch.optim.Adam(model.parameters(), lr=0.01)  # 1 group vs 2
+        assert _optimizer_state_compatible(opt2, opt1.state_dict()) is False
+
+    def test_non_dict_returns_false(self):
+        from src.training.main import _optimizer_state_compatible
+        model = torch.nn.Linear(3, 2)
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+        assert _optimizer_state_compatible(opt, None) is False
+
+
+class TestMWGateTrainable:
+    """Fix#3: mw_gate 不得随桶专家共享主干冻结（mode=mw_gated 需学习负载开关）。"""
+
+    def _bucket_worker(self, cfg, env):
+        return ActorCriticAttn(
+            obs_dim=env.obs_dim,
+            action_dim=4 * cfg.system.K,
+            K=cfg.system.K,
+            d_user=cfg.ppo.worker_d_user,
+            d_global=env.obs_dim - cfg.system.K * cfg.ppo.worker_d_user,
+            hidden_dim=16, n_heads=2, n_attn_layers=1,
+            use_plackett_luce=True,
+            use_mean_field_critic=False,
+            use_bucket_experts=True,
+            backpressure_mode="mw_gated",
+        )
+
+    def test_mw_gate_not_in_frozen_shared_trunk(self):
+        cfg = _mini_config()
+        env = _mini_env(cfg)
+        ac = self._bucket_worker(cfg, env)
+        shared = ac.shared_trunk_params()
+        # 用同一性比较（torch 张量 == 对不同形状会抛 RuntimeError）
+        assert all(p is not ac.mw_gate.weight for p in shared)
+        assert all(p is not ac.mw_gate.bias for p in shared)
+
+    def test_mw_gate_in_trainable_group(self):
+        cfg = _mini_config()
+        env = _mini_env(cfg)
+        cfg.ppo.use_bucket_experts = True
+        ac = self._bucket_worker(cfg, env)
+        trainer = PPOTrainer(ac, cfg.ppo)
+        trainable = [
+            g for g in trainer.optimizer.param_groups
+            if any(p is ac.mw_gate.weight for p in g["params"]) and g["lr"] > 0.0
+        ]
+        assert len(trainable) == 1
+
+
+class TestGuardBucketAndCliValidation:
+    """Fix#1 机制 + Fix#4/#5 CLI 校验助手。"""
+
+    def test_set_worker_bucket_follows_reset_snr(self):
+        from src.training.main import _set_worker_bucket
+        cfg = _mini_config()
+        cfg.ppo.use_bucket_experts = True
+        env = _mini_env(cfg)
+        ac = ActorCriticAttn(
+            obs_dim=env.obs_dim, action_dim=4 * cfg.system.K, K=cfg.system.K,
+            d_user=cfg.ppo.worker_d_user,
+            d_global=env.obs_dim - cfg.system.K * cfg.ppo.worker_d_user,
+            hidden_dim=16, n_heads=2, n_attn_layers=1,
+            use_plackett_luce=True, use_mean_field_critic=False,
+            use_bucket_experts=True,
+        )
+        env.reset(seed=0, options={"snr_db": 30.0})
+        _set_worker_bucket(ac, env)
+        assert ac.active_bucket == ac.set_active_bucket(30.0)
+        assert ac.active_bucket != ac.set_active_bucket(0.0) or cfg.system.K <= 4  # 30dB 是最高桶
+
+    def test_hm_targets_must_be_7(self):
+        from scripts.train import _validate_hm_point_targets
+        with pytest.raises(ValueError):
+            _validate_hm_point_targets([0.9, 0.95])
+        ok = _validate_hm_point_targets(list(range(0, 35, 5)))
+        assert len(ok) == 7
+
+    def test_guard_points_must_be_on_grid(self):
+        from scripts.train import _validate_eval_guard_snr_points
+        with pytest.raises(ValueError):
+            _validate_eval_guard_snr_points([0.0, 3.0, 30.0])
+        assert _validate_eval_guard_snr_points([0.0, 5.0, 30.0]) == (0.0, 5.0, 30.0)

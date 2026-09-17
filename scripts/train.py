@@ -7,9 +7,33 @@ from src.training.main import train
 from src.config import Config
 
 
+def _validate_hm_point_targets(vals: list[float]) -> tuple[float, ...]:
+    """--hm-point-targets 必须恰好 7 个值（0..30dB 逐点 delivery 目标）。"""
+    if len(vals) != 7:
+        raise ValueError(
+            "--hm-point-targets 必须恰好 7 个值（0..30dB 逐点 delivery 目标），"
+            f"got {len(vals)}: {vals}"
+        )
+    return tuple(vals)
+
+
+def _validate_eval_guard_snr_points(vals: list[float]) -> tuple[float, ...]:
+    """--eval-guard-snr-points 必须是参考表 _GUARD_REF 的网格点。"""
+    supported = {0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0}
+    bad = [p for p in vals if p not in supported]
+    if bad:
+        raise ValueError(
+            f"--eval-guard-snr-points 含非参考网格点 {bad}；仅支持 "
+            f"{sorted(supported)}（守卫参考表 _GUARD_REF 按这些点索引）"
+        )
+    return tuple(vals)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RSMA Energy-Efficient PPO Training")
     parser.add_argument('--V', type=float, default=1.0, help='Lyapunov V parameter')
+    parser.add_argument('--reward_dpp', action='store_true',
+                        help='classical drift-plus-penalty reward (neural-DPP comparator)')
     parser.add_argument('--lr_actor', type=float, default=3e-4, help='Actor learning rate')
     parser.add_argument('--lr_critic', type=float, default=1e-3, help='Critic learning rate')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
@@ -334,8 +358,11 @@ if __name__ == "__main__":
     if args.hard_mining_target is not None:
         config.ppo.hard_mining_target = args.hard_mining_target
     if args.hm_point_targets:
-        config.ppo.hm_point_targets = tuple(
-            float(s) for s in args.hm_point_targets.split(",") if s.strip())
+        try:
+            config.ppo.hm_point_targets = _validate_hm_point_targets(
+                [float(s) for s in args.hm_point_targets.split(",") if s.strip()])
+        except ValueError as e:
+            parser.error(str(e))
 
     # Task#38: Group-level α 架构参数注入
     if args.group_level_alpha is not None:
@@ -360,6 +387,18 @@ if __name__ == "__main__":
         config.lyapunov.V_exponent = args.V_exponent
     if args.blend_alpha is not None:
         config.lyapunov.blend_alpha = args.blend_alpha
+    if args.reward_dpp:
+        # neural-DPP comparator: classical drift-plus-penalty reward only
+        ly = config.lyapunov
+        ly.ee_mode = False
+        ly.ee_weight = 0.0
+        ly.ee_gate_enable = False
+        ly.use_dinkelbach = False
+        ly.w_deliv = 0.0
+        ly.w_ee_floor = 0.0
+        ly.ldptrlq_q_weight = 0.0
+        ly.w_early_overflow = 0.0
+        ly.w_backpressure = 0.0
 
     # Mean-Field MAPPO toggles
     if args.no_softmax_power_share:
@@ -458,8 +497,11 @@ if __name__ == "__main__":
     if args.eval_guard_queue_ratio is not None:
         config.ppo.eval_guard_queue_ratio = args.eval_guard_queue_ratio
     if args.eval_guard_snr_points:
-        config.ppo.eval_guard_snr_points = tuple(
-            float(s) for s in args.eval_guard_snr_points.split(",") if s.strip())
+        try:
+            config.ppo.eval_guard_snr_points = _validate_eval_guard_snr_points(
+                [float(s) for s in args.eval_guard_snr_points.split(",") if s.strip()])
+        except ValueError as e:
+            parser.error(str(e))
 
     # 冒烟测试：极小配置覆盖（快速验证代码可运行性）
     if args.smoke:

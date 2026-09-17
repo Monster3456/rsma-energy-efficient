@@ -35,6 +35,9 @@ class PPOTrainer:
                 {'params': actor_critic.expert_head_params(), 'lr': lr_expert},
                 {'params': actor_critic.critic_params(), 'lr': config.lr_critic},
                 {'params': actor_critic.log_std_params(), 'lr': lr_log_std},
+                # mw_gate 不随共享主干冻结（Run 13 门控需学习负载开关）：
+                # 追加到尾部组，避免打乱 main.py 按索引定位 actor/critic 组的约定
+                {'params': actor_critic.mw_gate_params(), 'lr': lr_expert},
             ])
         else:
             self.optimizer = torch.optim.Adam([

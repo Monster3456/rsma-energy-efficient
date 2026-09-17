@@ -913,17 +913,27 @@ class ActorCriticAttn(nn.Module):
         return cost_values
 
     def shared_trunk_params(self):
-        """返回 Actor 共享主干参数（桶专家模式下冻结）。"""
+        """返回 Actor 共享主干参数（桶专家模式下冻结）。
+
+        mw_gate 刻意不在冻结集内：Run 13 的门控基座是**要参与学习**的负载感知
+        标量（深过载学 g→1、欠载学 g→0），桶专家模式下它应处于可训练组
+        （见 ppo.py 优化器组构造），而不是被 lr=0 冻结成恒 sigmoid(4)≈0.982。
+        """
         shared_names = {
             "user_embed.", "film.", "global_proj.", "attn_layers.",
             "global_to_alpha_bias.", "global_to_p_bias.", "user_head.",
-            "mw_gate.",
         }
         params = []
         for name, p in self.named_parameters():
             if any(name.startswith(prefix) for prefix in shared_names):
                 params.append(p)
         return params
+
+    def mw_gate_params(self):
+        """mw_gated 门控层参数（mode≠3 时无梯度，Adam 自动跳过；始终可构造）。"""
+        if not hasattr(self, "mw_gate"):
+            return []
+        return [self.mw_gate.weight, self.mw_gate.bias]
 
     def expert_head_params(self):
         """返回桶专家头参数（桶专家模式下可训练）。"""

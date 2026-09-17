@@ -198,6 +198,26 @@ def _load_state_dict_with_padding(model: torch.nn.Module, state_dict: dict,
     return len(padded_keys) > 0 or len(skipped_keys) > 0
 
 
+def _optimizer_state_compatible(optimizer, ckpt_state) -> bool:
+    """resume 时判断 checkpoint 的 optimizer state 与本模型 param 组是否兼容。
+
+    结构变化（新增 mw_gate 组/参数、obs 维度变化）会使 torch 的
+    load_state_dict 抛 "parameter group that doesn't match"；据此返回 False，
+    调用方降级为跳过 optimizer state（模型权重仍完整加载）。
+    """
+    if not isinstance(ckpt_state, dict) or "param_groups" not in ckpt_state:
+        return False
+    try:
+        # ckpt 侧 param_groups 里只有参数 id（int），无法取 numel；按每组的参数个数
+        # 比较即可捕获"新增/移除参数入组"（如 mw_gate）与组数变化。形状 padding 类
+        # 维度变化仍由 worker_padded/meta_padded 判据兜底（调用方已叠加）。
+        counts_new = [len(g["params"]) for g in optimizer.param_groups]
+        counts_old = [len(g["params"]) for g in ckpt_state["param_groups"]]
+        return counts_new == counts_old
+    except Exception:
+        return False
+
+
 def _empty_meta_stats() -> dict:
     return {
         "ee_sum": 0.0,
@@ -542,6 +562,9 @@ def _guard_run_point(env_g, worker_ac, meta_ac, device, config,
     delivs, queues = [], []
     for i in range(int(n_eps)):
         obs, _ = env_g.reset(seed=seed0 + i, options={"snr_db": float(snr_db)})
+        # 与主循环其余 reset 处一致：按新 SNR 重设桶专家路由，避免守卫点
+        # 沿用上个 episode 的 stale active_bucket（默认 use_bucket_experts=True 时）
+        _set_worker_bucket(worker_ac, env_g)
         _meta_decide(meta_ac, env_g, device)
         last_deliv, q_sum, n_step = 0.0, 0.0, 0
         for _ in range(T):
@@ -578,9 +601,16 @@ def _guard_check(guard_env, worker_ac, meta_ac, device, config) -> dict:
     v2 = bool(getattr(config.ppo, "eval_guard_v2", False))
     q_ratio = float(getattr(config.ppo, "eval_guard_queue_ratio", 1.1))
 
+    service = sorted(_GUARD_REF)
     per_point, points_met = [], 0
     for snr in points:
-        ref = _GUARD_REF[float(snr)]
+        try:
+            ref = _GUARD_REF[float(snr)]
+        except KeyError:
+            raise ValueError(
+                f"eval_guard_snr_points 含非参考网格点 {snr!r}（参考表仅支持 "
+                f"{service}）；请在 scripts/train.py 层校验口径"
+            ) from None
         j = points.index(snr)
         dv, q = _guard_run_point(
             guard_env, worker_ac, meta_ac, device, config,
@@ -1100,13 +1130,21 @@ def train(config=None):
                 worker_ac.sync_expert_heads_from_reference()
                 print("[Resume] Bucket experts synced from reference user_head")
         meta_padded = _load_state_dict_with_padding(meta_ac, ckpt["meta_state_dict"], "Meta")
-        # Optimizer state: 维度变化后 momentum buffer 形状不兼容，必须跳过
-        if worker_padded or meta_padded:
-            print("[Resume] Dimension change detected, skipping optimizer state (re-init from scratch).")
-        else:
+        # Optimizer state: 维度变化后 momentum buffer 形状不兼容，必须跳过；
+        # param 组结构变化（如新加 mw_gate 组/参数）同样会使 load_state_dict 抛
+        # "parameter group that doesn't match"，一律降级为跳过（模型权重仍完整加载）。
+        opt_ok = (
+            not (worker_padded or meta_padded)
+            and _optimizer_state_compatible(worker_trainer.optimizer, ckpt.get("worker_optimizer"))
+            and _optimizer_state_compatible(meta_trainer.optimizer, ckpt.get("meta_optimizer"))
+        )
+        if opt_ok:
             worker_trainer.optimizer.load_state_dict(ckpt["worker_optimizer"])
             meta_trainer.optimizer.load_state_dict(ckpt["meta_optimizer"])
             print("[Resume] Optimizer states loaded successfully.")
+        else:
+            print("[Resume] Model weights loaded; optimizer state skipped "
+                  "(dimension or param-group change) - re-init from scratch.")
 
         # Resume 时可选降低 actor lr、收紧 clip 信任域
         resume_lr_scale = float(getattr(config.ppo, 'resume_lr_actor_scale', 1.0))
@@ -1535,6 +1573,19 @@ def train(config=None):
                 _meta_decide(meta_ac, env, device)
             )
             meta_stats = _empty_meta_stats()
+
+    # ---- M5.2-F6: KL-to-BC 信任域参考快照（非 se 路径兜底）----
+    # se 路径在全部 BC 阶段后已注入；resume / 非 PL / 桶专家等 se_on=False 的
+    # 流程此前从不注入（_bc_ac 恒 None → _klbc_term 静默 no-op），导致文档化的
+    # "best_guard + --kl-bc-coef 0.x" 微调流程实际不生效。兜底：PPO 主循环开始
+    # 前对当前（resume 加载后的）策略取一次快照，作为微调盆地中心。
+    if float(getattr(config.ppo, "kl_bc_coef", 0.0)) > 0.0:
+        if getattr(worker_trainer, "_bc_ac", None) is None:
+            ok_ref = worker_trainer.set_bc_reference(worker_ac.state_dict())
+            print(f"[KLBC] reference injected={ok_ref} "
+                  f"coef={config.ppo.kl_bc_coef} (non-se fallback)")
+        else:
+            print(f"[KLBC] reference already injected (se path) coef={config.ppo.kl_bc_coef}")
 
     # ---- M5-F4: Meta 冻结（采样照常、梯度更新暂停至指定 episode）----
     meta_freeze_eps = int(getattr(config.hierarchical, "meta_freeze_episodes", 0))

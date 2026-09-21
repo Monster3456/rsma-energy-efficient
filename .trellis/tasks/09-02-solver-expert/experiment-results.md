@@ -655,3 +655,15 @@ E1/E2 官方评估出分并完成 M5.3 终审之后。若 E 证明挖掘有效 �
   ⇒ 训练末快照跨 seed 不稳定，**guard 选点作为交付口径获回溯验证**（修正此前"final 更干净"直觉）
 - S46/bg 0.9526 与冠军 0.9519 差 0.0007（噪声内平手）；交付物仍为 m5_armA_sftp/best_guard.pt
 - 论文 §V-C/摘要/Fig.1 包络（5 成员）已刷新；主图重生成（docs/paper/figs/benchmarks_master.png）
+
+### 经典连续控制族对照臂预注册（TD3/DDPG，2026-09-21）
+
+- 目的：补齐审稿标准的经典 DRL 连续控制族（TD3/DDPG；SAC=DR-SAC 退化）
+- 配方：`scripts/baselines/train_td3ddpg.py`（复用 DR-SAC 的 Critic/env/回放管道），
+  单时间尺度、无层次/蒸馏/守卫（与 LDPTRLQ 同族协议）；策略=SA-GAT（随机 PL+连续），
+  TD3=双 Q+目标策略平滑+延迟 actor（连续头路径梯度，PL 排序贪心 detach）；
+  DDPG=单 Q 无平滑。8000ep seed 42，replay 200k
+- 判定（预注册）：与 LDPTRLQ 族同基准——若 best/final 官方分 ≤ bc_init 或 <7 点，
+  作为"经典 RL 从零无法解决过载实例"的又一反证记录；不因失败改判任何既有结论
+- 内存受限调度：TD3 现在起；DDPG 待 JointOpt 评估（~14h）结束自动续起
+- 结果待补

@@ -167,24 +167,25 @@ with SINR denominator collecting (i) interference from not-yet-decoded streams,
 (ii) SIC residual from decoded streams scaled by hardware imperfection
 $\beta^2$, and (iii) CSI-error residual scaled by $\varepsilon^2 p$, plus thermal
 noise $\sigma^2$:
-\begin{equation}
-\mathrm{SINR}_{k}^{(j)} = \frac{p_k |\vect{w}^{\mathsf H}\hat{\vect{h}}_k|^2}
-{\sum_{i\notin\mathcal{D}_j} p_i |\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2
-+ \beta^2 \sum_{i\in\mathcal{D}_j} p_i |\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2
-+ \varepsilon^2 \textstyle\sum_i p_i \|\vect{w}\|^2
-+ \sigma^2 \|\vect{w}\|^2},
+\begin{multline}
+\mathrm{SINR}_{k}^{(j)} = p_k\,|\vect{w}^{\mathsf H}\hat{\vect{h}}_k|^2
+\;/\;\Big(
+\sum_{i\notin\mathcal{D}_j} p_i |\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2
++ \beta^2 \sum_{i\in\mathcal{D}_j} p_i |\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2\\
++\ \varepsilon^2 \textstyle\sum_i p_i \|\vect{w}\|^2
++ \sigma^2 \|\vect{w}\|^2 \Big),
 \label{eq:sinr}
-\end{equation}
+\end{multline}
 where $\mathcal{D}_j$ is the set decoded before position $j$. The MMSE combiner is
 regularized by the worst-case bound via $\varepsilon^2 P_{\rm tot}\vect{I}$
 (robust MMSE). Evaluating \eqref{eq:sinr} at the common- and private-stream
 positions of user $k$ gives $\mathrm{SINR}_k^c,\mathrm{SINR}_k^p$, and the
 per-user and sum rates follow as
-\begin{equation}
-R_k = \log_2\!\big(1+\mathrm{SINR}_k^c\big) + \log_2\!\big(1+\mathrm{SINR}_k^p\big),
-\qquad R_{\rm sum} = \sum_{k=1}^{K} R_k.
+\begin{multline}
+R_k = \log_2\!\big(1+\mathrm{SINR}_k^c\big) + \log_2\!\big(1+\mathrm{SINR}_k^p\big),\\
+R_{\rm sum} = \sum_{k=1}^{K} R_k.
 \label{eq:rates}
-\end{equation}
+\end{multline}
 Declared rates use $(\hat{\vect{H}},\varepsilon)$; actual rates use
 $(\vect{H},\varepsilon{=}0)$; the outage-aware rate is their minimum, so
 over-declared rates are penalized by real throughput.
@@ -192,11 +193,11 @@ over-declared rates are penalized by real throughput.
 \subsection{Imperfect CSI and channel dynamics}
 Channels follow a 3GPP UMi path-loss model (users at 50--300\,m, exponent 3.76,
 normalized at 100\,m) with AR(1) temporal correlation
-\begin{equation}
-\vect{h}_k[t] = \rho\, \vect{h}_k[t-1] + \sqrt{1-\rho^2}\,\Delta\vect{h}_k[t],
-\quad \Delta\vect{h}_k[t]\sim\mathcal{CN}(\vect{0},\sigma_h^2\vect{I}),\ \rho=0.9,
+\begin{align}
+\vect{h}_k[t] &= \rho\, \vect{h}_k[t-1] + \sqrt{1-\rho^2}\,\Delta\vect{h}_k[t],\\
+\Delta\vect{h}_k[t] &\sim \mathcal{CN}\!\big(\vect{0},\,\sigma_h^2\vect{I}\big), \quad \rho=0.9,
 \label{eq:ar1}
-\end{equation}
+\end{align}
 i.e.\ slow Rayleigh fading whose coherence grows with $\rho$. Pilot-based MMSE
 estimation yields per-user error variance
 \begin{equation}
@@ -245,9 +246,10 @@ Let $\mathcal{S}=\{s_1,\dots,s_7\}$ be the evaluation SNR grid (0--30\,dB). The
 constraint set, relative to a reference SDMA policy, is
 \begin{equation}
 \mathrm{deliv}_\pi(s) \ge \mathrm{deliv}_{\rm SDMA}(s),\quad
-\mathrm{queue}_\pi(s) \le 1.1\,\mathrm{queue}_{\rm SDMA}(s),\ \forall s\in\mathcal{S},
+\mathrm{queue}_\pi(s) \le 1.1\,\mathrm{queue}_{\rm SDMA}(s),
 \label{eq:gates}
 \end{equation}
+for all $s\in\mathcal{S}$ (a \emph{relative two-bar gate} at each point).
 a \emph{relative two-bar gate} at each point. The reported score is the
 lexicographic tuple
 $[\#\{s:\text{gate met}\},\ \overline{\mathrm{deliv}},\ -\overline{\mathrm{queue}},\
@@ -313,9 +315,9 @@ With served bits $D_k$, effective power $P_{\rm eff}$, Dinkelbach ratio
 $q^\star$, delivery-debt queue $Y$ and power-budget queue $X$:
 \begin{multline}
 r = c\Big[ V\big(\textstyle\sum_k D_k - q^\star P_{\rm eff}\big)
-+ w_{\rm tp}\textstyle\sum_k \tfrac{Q_k}{Q_{\max}} w^{\rm qos}_k D_k
-+ w_y \tfrac{Y}{Y_{\rm ref}} \textstyle\sum_k D_k \\
-- w_q \textstyle\sum_k \tfrac{Q_k^2}{Q_{\max}^2}
++ w_{\rm tp}\textstyle\sum_k \tfrac{Q_k}{Q_{\max}} w^{\rm qos}_k D_k\\
++ w_y \tfrac{Y}{Y_{\rm ref}} \textstyle\sum_k D_k
+- w_q \textstyle\sum_k \tfrac{Q_k^2}{Q_{\max}^2}\\
 - \textstyle\sum_k w^{\rm qos}_k O_k
 - w_x \tfrac{X}{X_{\rm ref}} P_{\rm tot} \Big],
 \label{eq:dglcr}
@@ -489,8 +491,9 @@ ratio 1.0804 ($>1.05$). The advantage is largest in the deep-overload high-SNR
 regime (30\,dB: 0.888 vs.\ 0.664/0.581/0.601), and the policy uses roughly half
 the transmit power of fixed-power baselines.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
+\small
 \caption{Per-point delivery ratio / power (W) / queue; 50 episodes/point, imperfect CSI.}
 \label{tab:bench}
 \begin{tabular}{c|c|c|c|c}
@@ -506,7 +509,7 @@ SNR (dB) & PPO-RSMA & SDMA & NOMA & EqualPower \\
 30 & \textbf{0.888}/13.52/29.63 & 0.664/14.87/34.47 & 0.581/17.35/36.83 & 0.601/24.00/37.27 \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \begin{figure*}[t]
 \centering
@@ -566,8 +569,9 @@ causal claims for individual mechanisms at present sample sizes; the pre-registe
 follow-on (3 freeze-onsets $\times$ 3 seeds) is the design that could resolve
 onset effects above the noise floor.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
+\small
 \caption{Pre-registered fine-tuning variants (official best-guard score).}
 \label{tab:campaign}
 \begin{tabular}{l|l|l}
@@ -583,7 +587,7 @@ M5.3 E1: mining targets 0.92/0.93 & [7, 0.9474, $\dots$] & lose \\
 M5.3 E2: mining targets 0.95/0.95 & [7, 0.9471, $\dots$] & lose \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{The model-based per-slot optimization upper bound}
 Table~\ref{tab:free} adds the training-free comparators on the identical grid.
@@ -598,8 +602,9 @@ advantage is not CSI leakage: even a fair, causal, training-free per-slot
 optimizer dominates the learned policy on this grid. Classical adaptive-power and
 water-filling heuristics remain far below both (30\,dB: 0.777/0.778).
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
+\small
 \caption{Training-free comparators, per-point delivery (queue), 50 episodes/point.}
 \label{tab:free}
 \begin{tabular}{c|c|c|c|c|c}
@@ -615,7 +620,7 @@ SNR (dB) & DiffOpt & DiffOpt causal & AdaptivePower & WaterFilling & Champion (r
 30 & \textbf{0.905} (24.75) & 0.905 (24.74) & 0.777 (32.67) & 0.778 (32.63) & 0.888 (29.63) \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 This re-frames the contribution hierarchy honestly: the differentiable engine plus
 solver expert is itself the strongest controller on this grid; behavior cloning
@@ -656,8 +661,9 @@ is not step- or warm-start-limited---cold-start 25-step DiffOpt is already tight
 consistent with the earlier warm-vs-cold diagnostics. Table~\ref{tab:classic}
 summarizes the comparators.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
+\small
 \caption{Classic-family and optimization-depth comparators (official 7$\times$50, imperfect CSI).}
 \label{tab:classic}
 \begin{tabular}{l|c|c|c|c}
@@ -673,7 +679,7 @@ TD3 & 0/7 & 0.818 & 0.706 & 24 (sat.) \\
 LDPTRLQ & 0/7 & 0.782 & 0.595 & $\approx$23 \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{Checkpoint selection matters}
 The seed-44 episode exposes an evaluation pathology: a legacy 3-point mini-eval

@@ -498,7 +498,7 @@ the transmit power of fixed-power baselines.
 \label{tab:bench}
 \begin{tabular}{c|c|c|c|c}
 \toprule
-SNR (dB) & PPO-RSMA & SDMA & NOMA & EqualPower \\
+SNR (dB) & \bfseries Ours (SFTP policy) & SDMA & NOMA & EqualPower \\
 \midrule
 0  & \textbf{0.886}/13.72/2.84 & 0.856/14.69/3.46 & 0.836/17.35/4.01 & 0.791/24.00/4.94 \\
 5  & \textbf{0.989}/14.39/0.43 & 0.979/13.70/0.68 & 0.970/17.35/0.92 & 0.943/24.00/1.53 \\
@@ -524,7 +524,7 @@ it serves as the model-based upper bound in Table~\ref{tab:free} and
 \S\ref{sec:results}-E. Adaptive-power, water-filling and the causal DiffOpt
 variant are likewise omitted for clarity (Table~\ref{tab:free}), as are the
 individual seed members, which lie inside the envelope
-(\S\ref{sec:results}-C). PPO-RSMA dominates every external baseline at every
+(\S\ref{sec:results}-C). \textbf{Ours} dominates every external baseline at every
 SNR at roughly half the transmit power of the fixed-power schemes.}
 \label{fig:band}
 \end{figure*}
@@ -670,14 +670,15 @@ summarizes the comparators.
 \toprule
 Comparator & points & mean deliv & 30\,dB deliv & P (W) \\
 \midrule
-DiffOpt / DiffOptCausal (upper bound) & 7/7 & 0.957 & 0.905 & 13.4--14.6 \\
-Champion SFTP (deliverable, ref) & 7/7 & 0.9519 & 0.888 & 13.5--14.6 \\
-bc\_init (distillation, ref) & 7/7 & 0.9441 & 0.871 & 13.7 \\
-JointOpt (60-step warm-start) & 5/7 & 0.913 & 0.872 & $\approx$13 \\
-DDPG & 5/7 & 0.886 & 0.792 & 13.6--21.3 \\
-TD3 & 0/7 & 0.818 & 0.706 & 24 (sat.) \\
-LDPTRLQ & 0/7 & 0.782 & 0.595 & $\approx$23 \\
+\bfseries Ours (SFTP policy) [deliverable] & 7/7 & \textbf{0.9519} & 0.888 & 13.5--14.6 \\
+bc\_init (distillation, ours) & 7/7 & 0.9441 & 0.871 & 13.7 \\
+DiffOpt / causal (oracle teacher upper bound, ours)$^\dagger$ & 7/7 & 0.957 & 0.905 & 13.4--14.6 \\
+JointOpt (60-step warm, ours) & 5/7 & 0.913 & 0.872 & $\approx$13 \\
+DDPG~\cite{lillicrap2016ddpg} & 5/7 & 0.886 & 0.792 & 13.6--21.3 \\
+TD3~\cite{fujimoto2018td3} & 0/7 & 0.818 & 0.706 & 24 (sat.) \\
+LDPTRLQ~\cite{zhu2025lyapguid} & 0/7 & 0.782 & 0.595 & $\approx$23 \\
 \bottomrule
+\multicolumn{5}{l}{\footnotesize$^\dagger$ Our solver-expert engine with oracle CSI and 25 Adam steps per slot; a non-causal reference, not a deployable policy.}\\
 \end{tabular}
 \end{table*}
 
@@ -749,7 +750,7 @@ history $H=4$. PPO: clip 0.1, rollout 2048, batch 64, 8 epochs, actor lr 3e-5,
 GAE 0.95. Expert: Adam 25 steps lr 0.1 cold-start, 8{,}000 demos. Guard v2:
 6 points $\times$ 16 episodes + queue bar.
 
-\begin{thebibliography}{20}
+\begin{thebibliography}{22}
 
 \bibitem{yu2022robust}
 D. Yu, S.-H. Park, \emph{et al.}, ``Robust design of rate-splitting multiple access with imperfect CSI for cell-free MIMO systems,'' in \emph{Proc. IEEE ICC Workshops}, May 2022, pp. 604--609.
@@ -810,6 +811,12 @@ K. Wang, T. Zhou, \emph{et al.}, ``Fairness-aware energy-efficient power allocat
 
 \bibitem{falloun2025fixedpa}
 A. Falloun and A. Ait Madi, ``Fixed and fair power allocation in downlink and uplink NOMA: Outage probability analysis and bit error rate comparative study,'' \emph{Bull. Electr. Eng. Inform.}, vol. 14, no. 5, pp. 3509--3519, Oct. 2025.
+
+\bibitem{fujimoto2018td3}
+S. Fujimoto, H. van Hoof, and D. Meger, ``Addressing function approximation error in actor-critic methods,'' in \emph{Proc. Int. Conf. Machine Learning (ICML)}, 2018.
+
+\bibitem{lillicrap2016ddpg}
+T. P. Lillicrap \emph{et al.}, ``Continuous control with deep reinforcement learning,'' in \emph{Proc. Int. Conf. Learning Representations (ICLR)}, 2016.
 
 \end{thebibliography}
 

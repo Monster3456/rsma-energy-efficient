@@ -517,14 +517,15 @@ SNR (dB) & \bfseries Ours (SFTP policy) & SDMA & NOMA & EqualPower \\
 \caption{Master benchmark. \textbf{Ours (SFTP policy)}: 5-seed mean with
 min--max envelope vs classical baselines (SDMA~\cite{he2023eemumimo},
 NOMA~\cite{wang2023nomaee}, equal-power~\cite{falloun2025fixedpa}), the
-training-free heuristics adaptive-power and water-filling, and from-scratch RL
-(LDPTRLQ~\cite{zhu2025lyapguid}), on delivery, queue, power, EE, overflow and sum
-rate. Our engine's non-causal per-slot oracle optimizer (DiffOpt) and the
-classic-control arms (TD3/DDPG/JointOpt) are given as numeric comparators in
-Tables~\ref{tab:free} and~\ref{tab:classic}; individual seed members lie inside
-the envelope (\S\ref{sec:results}-C). \textbf{Ours} dominates every plotted
-baseline at every SNR at roughly half the transmit power of the fixed-power
-schemes.}
+adaptive-power heuristic (water-filling omitted: same channel-adaptive family,
+nearly identical delivery, they differ only in the power panel; tabulated in
+Table~\ref{tab:free}), and from-scratch RL (LDPTRLQ~\cite{zhu2025lyapguid}), on
+delivery, queue, power, EE, overflow and sum rate. Our engine's non-causal
+per-slot oracle optimizer (DiffOpt) and the classic-control arms
+(TD3/DDPG/JointOpt) are given as numeric comparators in Tables~\ref{tab:free}
+and~\ref{tab:classic}; individual seed members lie inside the envelope
+(\S\ref{sec:results}-C). \textbf{Ours} dominates every plotted baseline at every
+SNR at roughly half the transmit power of the fixed-power schemes.}
 \label{fig:band}
 \end{figure*}
 

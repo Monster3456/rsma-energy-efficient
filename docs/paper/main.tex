@@ -8,6 +8,8 @@
 \usepackage{url}
 \usepackage{booktabs}
 \usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 \graphicspath{{figs/}}
 
 \newcommand{\vect}[1]{\mathbf{#1}}
@@ -83,7 +85,7 @@ explicitly queue-aware. Rate-splitting multiple access (RSMA) mitigates overload
 by splitting each message into a \emph{common} stream decoded by all users and a
 \emph{private} stream decoded by its intended user, with successive interference
 cancellation (MMSE-SIC) at the receiver
-\cite{yu2022robust,karim2025uplink,clerckx2016rate}.
+~\cite{yu2022robust,karim2025uplink,clerckx2016rate}.
 Realizing RSMA's promise, however, requires solving a coupled, per-slot
 combinatorial problem---power allocation across users, the common/private split,
 and the SIC decoding order---repeatedly and online, under imperfect CSI and a
@@ -111,13 +113,13 @@ fails for a structural reason: the combinatorial SIC order and non-differentiabl
 rate expressions block gradient-based credit assignment, and the reward's delivery
 gate creates sparse, saturating gradients at exactly the points that matter.
 Recent robust and distributionally-robust DRL beamforming
-\cite{schroder2025modelfree,wang2024distributionally,cui2025drsac} and
-generalization analyses \cite{luan2023achieving,demirel2025generalization,luan2025robust}
+~\cite{schroder2025modelfree,wang2024distributionally,cui2025drsac} and
+generalization analyses~\cite{demirel2025generalization,luan2025robust}
 address robustness to CSI perturbation but not the simultaneous per-point QoS
 structure. Lyapunov drift-plus-penalty methods
-\cite{xu2025lyapunov,neely2010stochastic,rashwan2025neural} provide queue-stability
+~\cite{zhu2025lyapguid,neely2010stochastic,zakeri2024lyaplearn} provide queue-stability
 guarantees for \emph{given} rate regions but do not learn the combinatorial
-allocation itself; policy-distillation practice in RANs \cite{khosravi2025practical}
+allocation itself; policy-distillation practice in RANs~\cite{khosravi2025practical}
 motivates our teacher$\to$student design but does not couple distillation to
 per-slot combinatorial refinement under hard per-point gates.
 
@@ -147,7 +149,17 @@ that dispersion.
 A single base station with $N_r$ antennas serves $K$ users, each with $N_t$
 transmit antennas, over $T$ slots per episode. User $k$'s message is split into a
 common part (share governed by $\alpha_k \in [\alpha_{\min},\alpha_{\max}]$) and a
-private part. The BS applies unified MRT transmit weights
+private part. Users assigned to group $g$ share a common stream decoded by all
+group members; all common streams precede all private streams in the decoding
+order, and common-stream SIC cancellation is performed only within a group. The
+transmitted signal of user $k$ is
+\begin{equation}
+x_k = \sqrt{\alpha_k p_k}\, s_k^c + \sqrt{(1-\alpha_k) p_k}\, s_k^p,\qquad
+\mathbb{E}|s_k^c|^2 = \mathbb{E}|s_k^p|^2 = 1,
+\label{eq:tx}
+\end{equation}
+where $\alpha_k=0$ recovers unsplit (SDMA/NOMA-type) transmission. The BS applies
+unified MRT transmit weights
 $\vect{W}_c,\vect{W}_p \in \mathbb{C}^{N_r\times K}$ under per-user caps
 $P_k \le P_{k,\max}$. The receiver performs MMSE-SIC in decoding order $\pi$. For
 a stream decoded at position $j$ in $\pi$, the rate is $R=\log_2(1+\mathrm{SINR})$
@@ -165,13 +177,27 @@ noise $\sigma^2$:
 \end{equation}
 where $\mathcal{D}_j$ is the set decoded before position $j$. The MMSE combiner is
 regularized by the worst-case bound via $\varepsilon^2 P_{\rm tot}\vect{I}$
-(robust MMSE). Declared rates use $(\hat{\vect{H}},\varepsilon)$; actual rates use
+(robust MMSE). Evaluating \eqref{eq:sinr} at the common- and private-stream
+positions of user $k$ gives $\mathrm{SINR}_k^c,\mathrm{SINR}_k^p$, and the
+per-user and sum rates follow as
+\begin{equation}
+R_k = \log_2\!\big(1+\mathrm{SINR}_k^c\big) + \log_2\!\big(1+\mathrm{SINR}_k^p\big),
+\qquad R_{\rm sum} = \sum_{k=1}^{K} R_k.
+\label{eq:rates}
+\end{equation}
+Declared rates use $(\hat{\vect{H}},\varepsilon)$; actual rates use
 $(\vect{H},\varepsilon{=}0)$; the outage-aware rate is their minimum, so
 over-declared rates are penalized by real throughput.
 
 \subsection{Imperfect CSI and channel dynamics}
 Channels follow a 3GPP UMi path-loss model (users at 50--300\,m, exponent 3.76,
-normalized at 100\,m) with AR(1) correlation $\rho=0.9$. Pilot-based MMSE
+normalized at 100\,m) with AR(1) temporal correlation
+\begin{equation}
+\vect{h}_k[t] = \rho\, \vect{h}_k[t-1] + \sqrt{1-\rho^2}\,\Delta\vect{h}_k[t],
+\quad \Delta\vect{h}_k[t]\sim\mathcal{CN}(\vect{0},\sigma_h^2\vect{I}),\ \rho=0.9,
+\label{eq:ar1}
+\end{equation}
+i.e.\ slow Rayleigh fading whose coherence grows with $\rho$. Pilot-based MMSE
 estimation yields per-user error variance
 \begin{equation}
 \sigma_{\rm est}^2 = \frac{\sigma^2}{K\,p_{\rm pilot}} + \varepsilon_{\rm floor}^2,
@@ -191,7 +217,17 @@ arrival/drift/overflow weights. Queues evolve as
 Q_k[t{+}1] = \min\{\max\{Q_k[t]-D_k[t],0\}+A_k[t],\, Q_{\max}\},
 \label{eq:queue}
 \end{equation}
-with served bits $D_k[t]\le R_k[t]$ and overflow $O_k[t]$. The delivery ratio is
+with served bits
+\begin{equation}
+D_k[t] = \min\{Q_k[t],\ d_k[t]\, R_k[t]\},\qquad d_k[t]\in[0,1],
+\label{eq:served}
+\end{equation}
+where $d_k$ is the worker's queue-drain ratio, and overflow $O_k[t]$ counting
+bits dropped at $Q_{\max}$. The delivery ratio over an episode is
+\begin{equation}
+\mathrm{deliv} = \frac{\sum_k \sum_t D_k[t]}{\sum_k \sum_t A_k[t]},
+\label{eq:deliv}
+\end{equation}
 the fraction of arrived bits served within the horizon.
 
 \subsection{Power consumption and energy efficiency}
@@ -217,7 +253,20 @@ lexicographic tuple
 $[\#\{s:\text{gate met}\},\ \overline{\mathrm{deliv}},\ -\overline{\mathrm{queue}},\
 \mathrm{EE\ ratio}]$, so cleared points dominate, then mean delivery, queue, EE
 ratio. A global aggregate check gates termination but does not substitute
-\eqref{eq:gates}.
+\eqref{eq:gates}. Collecting the per-slot decisions into
+$\vect{x}[t]=(\vect{g},\vect{\alpha},\vect{p},\vect{d},\pi)[t]$, the design
+problem is the constrained stochastic control problem
+\begin{equation}
+\begin{split}
+&\max_{\{\vect{x}[t]\}}\ \liminf_{T\to\infty}\ \frac{1}{T}\sum_{t=0}^{T-1}\mathrm{EE}[t]\\
+&\text{s.t.}\quad \eqref{eq:gates},\ \ p_k[t]\le P_{k,\max},\ \ \bar{Q}_k<\infty,\ \ \pi[t]\in\mathcal{S}_K,
+\end{split}
+\label{eq:p1}
+\end{equation}
+where $\mathcal{S}_K$ denotes the valid SIC permutations. Because a single
+policy must satisfy \eqref{eq:gates} at \emph{every} point simultaneously,
+\eqref{eq:p1} cannot be decomposed per SNR point, which is precisely the
+structure that defeats per-point-agnostic baselines (\S\ref{sec:results}).
 
 \section{Proposed Framework}
 \label{sec:method}
@@ -227,9 +276,25 @@ The slow scale (every $T_s=20$ slots) selects grouping $g_k\in\{0,\dots,G-1\}$ a
 group-level split $\vect{\alpha}\in[\alpha_{\min},\alpha_{\max}]^G$ expanded per
 user. The fast scale (every slot) selects the $4K$-dim action: power-share logits
 (softmax shares $\times K$, clipped), drain ratio $d_k\in[0,1]$, and
-Plackett-Luce scores $z_k$ \cite{plackett1975,luce1959} inducing SIC order $\pi$ by
-Gumbel top-$K$ sampling.
-Observations are per-user feature blocks plus globals; a history window of the
+Plackett-Luce scores $z_k$~\cite{plackett1975,luce1959} inducing SIC order $\pi$ by
+Gumbel top-$K$ sampling:
+\begin{equation}
+\begin{split}
+&P(\pi\mid\vect{z}) = \prod_{i=1}^{K}\frac{z_{\pi(i)}}{\sum_{j=i}^{K} z_{\pi(j)}},\\
+&\pi = \arg\mathrm{sort}\big(-(\log\vect{z}+\vect{\gamma})\big),\quad
+\gamma_i\sim\mathrm{Gumbel}(0,1),
+\end{split}
+\label{eq:pl}
+\end{equation}
+with $\log P(\pi\mid\vect{z})=\sum_i\big[\log z_{\pi(i)}-\log\sum_{j\ge i}
+z_{\pi(j)}\big]$ supplying the differentiable permutation log-probability for
+the policy gradient; at deployment the order is deterministic,
+$\pi=\arg\mathrm{sort}(-\vect{z})$. Power logits are mapped to shares by a
+clipped softmax over users, so the $4K$ action stays in a bounded domain.
+Observations are per-user feature blocks plus globals; the worker observation is
+$11K{+}3$ dimensional (per-user channel gain, queue, arrival, power/rate
+history, interference and QoS-class fields, plus global SNR, CSI-error and time
+scalars), and a history window of the
 last $H$ slots augments each user token. Lagrangian multipliers, delivery-debt
 backlog and Dinkelbach ratio are injected by equal-dimension state augmentation.
 
@@ -255,12 +320,19 @@ r = c\Big[ V\big(\textstyle\sum_k D_k - q^\star P_{\rm eff}\big)
 - w_x \tfrac{X}{X_{\rm ref}} P_{\rm tot} \Big],
 \label{eq:dglcr}
 \end{multline}
-where the first term is the Dinkelbach-linearized EE \cite{dinkelbach1967}
+where the first term is the Dinkelbach-linearized EE~\cite{dinkelbach1967}
 ($q^\star$ on an outer loop),
 the second max-weight throughput, the third delivery-debt coupling, and the rest
 queue/overflow and power-budget penalties. Sigmoid gates on the EE term and on
 penalties prevent the low-power trap $\partial\mathrm{EE}/\partial P<0$ from
-dominating while delivery is infeasible.
+dominating while delivery is infeasible. The Dinkelbach ratio is refreshed on an
+outer loop as
+\begin{equation}
+q^\star \leftarrow \frac{\mathbb{E}\big[\sum_k D_k\big]}{\mathbb{E}\big[P_{\rm eff}\big]},
+\label{eq:dinkelbach}
+\end{equation}
+which is exactly the linearization that turns the fractional objective
+$\mathrm{EE}=R_{\rm sum}/P_{\rm eff}$ into the first term of \eqref{eq:dglcr}.
 
 \subsection{Constraint stack}
 A Lagrangian dual variable $\lambda$ on the delivery constraint ($\ge0.98$) is
@@ -268,7 +340,19 @@ updated with warmup and cap; its per-step signal is an EMA of instantaneous
 delivery. The EE policy-gradient is projected onto the null space of the
 delivery-constraint gradient (lexicographic projection). Per-user delivery
 virtual queues (DVQ) with CVaR tail focus (worst 25\%) concentrate penalty on
-users risking the per-point gate.
+users risking the per-point gate. Concretely, with $c\ge0$ the delivery-constraint
+residual and $\vect{g}$ the EE policy-gradient,
+\begin{equation}
+\begin{split}
+&\lambda \leftarrow \big[\lambda + \eta_\lambda(\tau - \widehat{\mathrm{deliv}})\big]_+^{\lambda_\cap},\\
+&\vect{g} \leftarrow \vect{g} - \frac{\vect{g}^{\sf T}\nabla c}{\|\nabla c\|^2}\,\nabla c
+\quad \text{if } c\ge 0,\ \vect{g}^{\sf T}\nabla c < 0,
+\end{split}
+\label{eq:lagproj}
+\end{equation}
+i.e.\ the dual ascent is warm-started and capped, and the projection removes the
+component of the EE gradient that would push the policy back into the
+delivery-infeasible region.
 
 \subsection{Solver expert and differentiable rate engine}
 Because $R(\cdot)$ is non-differentiable through $\pi$ and the min-outage
@@ -276,8 +360,21 @@ operator, we implement a torch shadow of the MMSE-SIC rate computation, verified
 float64-consistent with the immutable reference to atol $10^{-9}$. Per slot, the
 expert runs a short Adam refinement (25 steps, lr 0.1, cold start) on power logits
 against a DGLCR surrogate mirroring the active reward branch, plus
-candidate-selection among decoding orders (gain-descending / queue-last). The
-expert exceeds SDMA delivery at every tested SNR (0/5/15/30\,dB:
+candidate-selection among decoding orders (gain-descending / queue-last).
+Formally, for each candidate order $\pi_o$ the expert solves
+\begin{equation}
+\begin{split}
+&\theta^{(i+1)}_{\pi_o} = \theta^{(i)}_{\pi_o} - \eta_{\rm Adam}\,
+\nabla_\theta \hat{J}_{\rm DGLCR}(\theta;\pi_o),\quad i=1,\dots,25,\\
+&o^\star = \arg\max_o \hat{J}_{\rm DGLCR}(\theta^{(25)}_{\pi_o};\pi_o),
+\end{split}
+\label{eq:expert}
+\end{equation}
+cold-started every slot, where $\hat{J}_{\rm DGLCR}$ is the differentiable
+surrogate mirroring the active reward branch and $\theta$ are the power logits.
+Equation \eqref{eq:expert} contains no learned policy: it is a training-free,
+model-based per-slot optimizer whose only ingredient is the differentiable rate
+engine. The expert exceeds SDMA delivery at every tested SNR (0/5/15/30\,dB:
 $+4.0/+1.4/+10.0/+23.9$ percentage points) at lower power.
 
 \subsection{Distillation and stepwise-frozen fine-tuning (SFTP)}
@@ -285,19 +382,61 @@ Demonstrations from the expert (8{,}000 episodes) train the policy by behavior
 cloning (BC) on continuous heads and the Plackett-Luce head; BC alone clears all 7
 gates. The policy is fine-tuned with PPO under SFTP: an anchor term injecting the
 BC gradient into the lexicographic-projection path, critic-only warm-up, a
-persistent anchor with slow decay, and guard-based checkpoint selection. The
-combination of KL early-stopping and the learning-rate decay floor collapses the
+persistent anchor with slow decay, and guard-based checkpoint selection.
+Behavior cloning minimizes
+\begin{equation}
+\mathcal{L}_{\rm BC} = \mathbb{E}\big[\|\vect{a}^{\rm cont}_\theta -
+\vect{a}^{\rm cont}_{\rm expert}\|^2\big]
+- \mathbb{E}\big[\log P(\pi_{\rm expert}\mid\vect{z}_\theta)\big],
+\label{eq:bc}
+\end{equation}
+i.e.\ mean-square error on the continuous heads (power shares, drain ratios)
+plus the Plackett-Luce negative log-likelihood of the expert's decoding order,
+and the fine-tune optimizes the clipped surrogate
+\begin{equation}
+\begin{split}
+\mathcal{L}_{\rm PPO} = \mathbb{E}\big[\min\big(r_t(\theta)\hat{A}_t,\
+\mathrm{clip}(r_t(\theta),1-\epsilon,1+\epsilon)\hat{A}_t\big)\big]\\
+- c_v \mathcal{L}_{\rm VF} + c_e \mathcal{H}[\pi_\theta],
+\end{split}
+\label{eq:ppo}
+\end{equation}
+with importance ratio $r_t(\theta)=\pi_\theta(a_t|s_t)/
+\pi_{\theta_{\rm old}}(a_t|s_t)$, GAE advantage $\hat{A}_t$, value loss
+$\mathcal{L}_{\rm VF}$ and entropy bonus $\mathcal{H}$.
+The combination of KL early-stopping and the learning-rate decay floor collapses the
 actor learning rate to its floor early ($\sim$update 100 of $\sim$780), an
 \emph{emergent stepwise freeze} acting as an implicit trust region around the
 distilled basin; \S\ref{sec:results}-D examines whether this freeze is causal.
 
 \subsection{Training protocol}
-Policy-gradient optimization via PPO \cite{schulman2017ppo,sutton1999policy} with
+Policy-gradient optimization via PPO~\cite{zhang2023pporsma,sutton1999policy} with
 clip 0.1, rollout 2048, batch 64, 8 epochs, GAE $\lambda=0.95$, actor lr
 $3\times10^{-5}$; a difficulty-annealing curriculum (5 stages) and hard-example
 mining re-weighting per-SNR-bucket sampling by delivery shortfall with streak
 multipliers and performance-linked entropy incentives. All mechanism flags
-default off so the official evaluation profile is unchanged.
+default off so the official evaluation profile is unchanged. The complete
+pipeline is summarized in Algorithm~\ref{alg:train}.
+
+\begin{algorithm}[!t]
+\caption{Two-timescale hierarchical training with solver-expert distillation (SFTP)}
+\label{alg:train}
+\begin{algorithmic}[1]
+\State Run the solver expert \eqref{eq:expert} for $8{,}000$ episodes; store $(s_t,\ \vect{a}^{\rm cont}_{\rm exp},\ \pi_{\rm exp})$
+\State Pre-train worker and meta policies by BC on $\mathcal{L}_{\rm BC}$ \eqref{eq:bc}
+\State Initialize $\lambda$, $q^\star$, delivery-debt queue $Y$, power-budget queue $X$
+\For{episode $=1,\dots,N$}
+  \State Meta: sample $(\vect{g},\vect{\alpha})$; hold fixed for $T_s$ slots
+  \For{slot $t=1,\dots,T$}
+    \State Worker: sample $(\vect{p},\vect{d},\pi)$ from $\pi_\theta(\cdot\mid s_t)$ via \eqref{eq:pl}
+    \State Env: rates \eqref{eq:rates}, queues \eqref{eq:queue}, reward \eqref{eq:dglcr}
+  \EndFor
+  \State Update $q^\star$ \eqref{eq:dinkelbach}; update $\lambda$ and project gradients \eqref{eq:lagproj}
+  \State PPO update on $\mathcal{L}_{\rm PPO}$ \eqref{eq:ppo} with SFTP anchor and critic warm-up
+\EndFor
+\State Select checkpoint by the per-point guard (6 SNR points $\times$ 16 episodes + queue bar)
+\end{algorithmic}
+\end{algorithm}
 
 \section{Experimental Methodology}
 \label{sec:methodology}
@@ -312,14 +451,17 @@ episodes/point, imperfect CSI; gates and lexicographic score per
 \S\ref{sec:system}. Every score is produced by the same immutable evaluation
 script; checkpoints selected by the guard are re-evaluated officially.
 
-\emph{Comparator set (classical + recent).} Beyond classical SDMA/NOMA/equal-power,
-we compare against four recent (2025--2026) algorithms re-implemented in the
-identical environment and protocol: (i) \emph{LDPTRLQ-style} single-timescale
-Lyapunov drift-plus-penalty RL \cite{xu2025lyapunov} (queue-stable DPP reward, no
-hierarchy, no distillation); (ii) \emph{DR-SAC} \cite{cui2025drsac},
+\emph{Comparator set (classical + recent).} Beyond classical SDMA
+~\cite{he2023eemumimo}, NOMA~\cite{wang2023nomaee} and equal-power allocation
+~\cite{falloun2025fixedpa}, we compare against four recent (2025--2026)
+algorithms re-implemented in the identical environment and protocol: (i) \emph{LDPTRLQ-style} single-timescale
+Lyapunov drift-plus-penalty RL in the family of Lyapunov-guided DRL for energy
+efficiency~\cite{zhu2025lyapguid} (queue-stable DPP reward, no hierarchy, no
+distillation); (ii) \emph{DR-SAC}~\cite{cui2025drsac},
 distributionally-robust SAC trained against the worst case over the SNR/CSI
-uncertainty domain (ICLR 2026); (iii) \emph{neural-DPP} \cite{rashwan2025neural}, a
-learned per-slot drift-plus-penalty policy for power allocation; (iv)
+uncertainty domain (ICLR 2026); (iii) \emph{neural-DPP}-style learned per-slot
+drift-plus-penalty control in the family of learning-augmented Lyapunov
+scheduling~\cite{zakeri2024lyaplearn}; (iv)
 \emph{DiffOpt}, a training-free model-based comparator running the differentiable
 MMSE-SIC shadow engine as a per-slot online optimizer (the solver expert without
 any learned policy), isolating learning from per-slot optimization. The
@@ -369,13 +511,18 @@ SNR (dB) & PPO-RSMA & SDMA & NOMA & EqualPower \\
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{benchmarks_master}
-\caption{Master benchmark: PPO-RSMA 5-seed mean with min--max envelope (faint
-member lines) against classical baselines (SDMA/NOMA/EqualPower) and the novel
-comparators (DiffOpt oracle and causal per-slot optimization, adaptive power,
-water filling) on delivery, queue, power, EE, overflow and sum rate. PPO-RSMA
-dominates the classical baselines at every SNR at roughly half their transmit
-power; the training-free per-slot optimizer (DiffOpt) traces the model-based
-upper bound just above the PPO band.}
+\caption{Master benchmark: PPO-RSMA (ours) 5-seed mean with min--max envelope
+against the external baselines only --- classical SDMA~\cite{he2023eemumimo},
+NOMA~\cite{wang2023nomaee} and equal-power~\cite{falloun2025fixedpa}, plus the
+single-timescale Lyapunov drift-plus-penalty RL comparator (LDPTRLQ
+~\cite{zhu2025lyapguid}) --- on delivery, queue, power, EE, overflow and sum
+rate. The training-free per-slot optimizer (DiffOpt, ours) is not plotted here;
+it serves as the model-based upper bound in Table~\ref{tab:free} and
+\S\ref{sec:results}-E. Adaptive-power, water-filling and the causal DiffOpt
+variant are likewise omitted for clarity (Table~\ref{tab:free}), as are the
+individual seed members, which lie inside the envelope
+(\S\ref{sec:results}-C). PPO-RSMA dominates every external baseline at every
+SNR at roughly half the transmit power of the fixed-power schemes.}
 \label{fig:band}
 \end{figure*}
 
@@ -482,7 +629,7 @@ student} (BC), not the live optimizer, which was never officially evaluated unti
 now.
 
 \emph{Trained recent-family comparator.} A single-timescale Lyapunov
-drift-plus-penalty RL baseline in the LDPTRLQ family \cite{xu2025lyapunov} (PPO
+drift-plus-penalty RL baseline in the LDPTRLQ family~\cite{zhu2025lyapguid} (PPO
 with queue-Lyapunov penalties and the same curriculum/mining protocol, but no
 hierarchy, no distillation, no guard) clears \textbf{0/7 gates} (mean delivery
 0.782, mean power 23.2\,W $\approx$ saturated; Fig.~\ref{fig:band}). Vanilla
@@ -490,6 +637,23 @@ queue-Lyapunov RL therefore cannot solve this overloaded instance from scratch;
 together with bc\_init (7/7 from pure distillation) this localizes the enabling
 ingredient to \emph{expert initialization}, not to the reward family or the
 hierarchy alone.
+
+\emph{Classic continuous-control family (TD3/DDPG).} The review-standard TD3/DDPG
+pair, adapted to the mixed PL+continuous action space (deterministic pathwise
+actor through the differentiable $\tanh(\mu)$ continuous head, greedy PL order;
+twin-Q TD targets with target-policy smoothing and a delayed actor for TD3, single
+Q for DDPG; single-timescale, no distillation, no guard): TD3 clears 0/7 gates
+(mean delivery 0.818 at a saturated 24\,W transmit power, low-SNR points fail);
+DDPG reaches 5/7 (mean delivery 0.886) but still misses the two low-SNR gates
+$\{0,5\}$\,dB on both delivery and queue. Both fall below the distilled policy
+(bc\_init 7/7, 0.9441) and confirm the LDPTRLQ pattern: from-scratch RL cannot
+solve this overloaded instance, whatever the algorithm family.
+
+\emph{Optimization-depth check (JointOpt).} A per-slot optimizer with 60
+warm-started Adam steps (vs.\ DiffOpt's 25 cold-start) scores below DiffOpt at
+every point (mean 0.913 vs.\ 0.957, $\approx$13\,W): the model-based upper bound
+is not step- or warm-start-limited---cold-start 25-step DiffOpt is already tight,
+consistent with the earlier warm-vs-cold diagnostics.
 
 \subsection{Checkpoint selection matters}
 The seed-44 episode exposes an evaluation pathology: a legacy 3-point mini-eval
@@ -559,60 +723,68 @@ history $H=4$. PPO: clip 0.1, rollout 2048, batch 64, 8 epochs, actor lr 3e-5,
 GAE 0.95. Expert: Adam 25 steps lr 0.1 cold-start, 8{,}000 demos. Guard v2:
 6 points $\times$ 16 episodes + queue bar.
 
-\begin{thebibliography}{18}
-\bibitem{yu2022robust} D.~Yu, S.-H.~Park, O.~Simeone, and S.~Shamai, ``Robust
-design of rate-splitting multiple access with imperfect CSI for cell-free MIMO
-systems,'' \emph{arXiv:2203.03690}, 2022.
-\bibitem{karim2025uplink} F.~Karim, N.~H.~Mahmood, A.~S.~de Sena, D.~Kumar,
-B.~Clerckx, and M.~Latva-aho, ``Uplink rate splitting multiple access with
-imperfect channel state information and interference cancellation,''
-\emph{IEEE Wireless Commun. Lett.}, vol.~14, no.~5, 2025,
-doi:10.1109/LWC.2025.3538800 (arXiv:2501.19019).
-\bibitem{schroder2025modelfree} A.~Schr\"oder, S.~Gracla, C.~Bockelmann,
-D.~W\"ubben, and A.~Dekorsy, ``Model-free robust beamforming in satellite downlink
-using reinforcement learning,'' \emph{arXiv:2510.25393}, 2025.
-\bibitem{wang2024distributionally} J.~Wang, Z.~Ren, R.~Zhan, and Z.~Zhou,
-``Distributionally robust policy learning under concept drifts,'' in \emph{Proc.
-42nd Int. Conf. Machine Learning (ICML)}, PMLR 267, Vancouver, Canada, 2025
-(arXiv:2412.14297).
-\bibitem{luan2023achieving} D.~Luan and J.~Thompson, ``Achieving robust
-generalization for wireless channel estimation neural networks by designed
-training data,'' \emph{arXiv:2302.02302}, 2023.
-\bibitem{demirel2025generalization} B.~Demirel, Y.~Wang, C.~Tatino, and
-P.~Soldati, ``Generalization in reinforcement learning for radio access
-networks,'' \emph{arXiv:2507.06602}, 2025.
-\bibitem{xu2025lyapunov} W.~Xu, J.~Jiang, L.~Deng, and D.~H.-K.~Tsang, ``A
-Lyapunov drift-plus-penalty method tailored for reinforcement learning with queue
-stability,'' \emph{arXiv:2506.04291}, 2025. (LDPTRLQ)
-\bibitem{neely2010stochastic} M.~J.~Neely, \emph{Stochastic Network Optimization
-with Application to Communication and Queueing Systems}. Morgan \& Claypool, 2010.
-\bibitem{dinkelbach1967} W.~Dinkelbach, ``On nonlinear fractional programming,''
-\emph{Management Science}, vol.~13, no.~7, pp.~492--498, 1967.
-\bibitem{clerckx2016rate} B.~Clerckx, H.~Joudeh, C.~Hao, M.~Dai, and B.~Sharif,
-``Rate splitting for MIMO wireless networks: a promising PHY-layer strategy for
-LTE evolution,'' \emph{IEEE Commun. Mag.}, vol.~54, no.~3, pp.~98--105, 2016.
-\bibitem{schulman2017ppo} J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and
-O.~Klimov, ``Proximal policy optimization algorithms,'' \emph{arXiv:1707.06347},
-2017.
-\bibitem{sutton1999policy} R.~S.~Sutton, D.~McAllester, S.~Singh, and Y.~Mansour,
-``Policy gradient methods for reinforcement learning with function
-approximation,'' in \emph{Adv. Neural Inf. Process. Syst. (NeurIPS)}, 1999.
-\bibitem{plackett1975} J.~A.~Plackett, ``The analysis of permutations,''
-\emph{Applied Statistics}, vol.~24, no.~2, pp.~193--202, 1975.
-\bibitem{luce1959} R.~D.~Luce, \emph{Individual Choice Behavior}. Wiley, 1959.
-\bibitem{khosravi2025practical} S.~Khosravi, B.~Demirel, L.~Zhou, J.~Rasines, and
-P.~Soldati, ``Practical policy distillation for reinforcement learning in radio
-access networks,'' in \emph{Proc. IEEE PIMRC}, 2025 (arXiv:2511.06563).
-\bibitem{cui2025drsac} M.~Cui, D.~Zhou, Y.~Han, G.~A.~Hanasusanto, Q.~Wang,
-H.~Zhang, and Z.~Zhou, ``DR-SAC: distributionally robust soft actor-critic for
-reinforcement learning under uncertainty,'' in \emph{Proc. ICLR}, 2026
-(arXiv:2506.12622).
-\bibitem{rashwan2025neural} A.~Rashwan, K.~Briggs, and C.~Budd, ``A neural
-drift-plus-penalty algorithm for network power allocation and routing,''
-\emph{arXiv:2509.09637}, 2025.
-\bibitem{luan2025robust} D.~Luan and J.~Thompson, ``Achieving robust channel
-estimation neural networks by designed training data,'' \emph{IEEE Trans. Cogn.
-Commun. Netw.}, 2025 (arXiv:2507.12630).
+\begin{thebibliography}{20}
+
+\bibitem{yu2022robust}
+D. Yu, S.-H. Park, \emph{et al.}, ``Robust design of rate-splitting multiple access with imperfect CSI for cell-free MIMO systems,'' in \emph{Proc. IEEE ICC Workshops}, May 2022, pp. 604--609.
+
+\bibitem{karim2025uplink}
+F. Karim, N. H. Mahmood, \emph{et al.}, ``Uplink rate splitting multiple access with imperfect channel state information and interference cancellation,'' \emph{IEEE Wireless Commun. Lett.}, vol. 14, no. 5, pp. 1316--1320, May 2025.
+
+\bibitem{clerckx2016rate}
+B. Clerckx, H. Joudeh, \emph{et al.}, ``Rate splitting for MIMO wireless networks: A promising PHY-layer strategy for LTE evolution,'' \emph{IEEE Commun. Mag.}, vol. 54, no. 3, pp. 98--105, Mar. 2016.
+
+\bibitem{schroder2025modelfree}
+A. Schr\"oder, S. Gracla, \emph{et al.}, ``Model-free robust beamforming in satellite downlink using reinforcement learning,'' \emph{IEEE Open J. Commun. Soc.}, vol. 6, pp. 10582--10598, 2025.
+
+\bibitem{wang2024distributionally}
+J. Wang, Z. Ren, \emph{et al.}, ``Distributionally robust policy learning under concept drifts,'' in \emph{Proc. Int. Conf. Mach. Learn. (ICML)}, Vancouver, BC, Canada, Jul. 2025.
+
+\bibitem{cui2025drsac}
+M. Cui, D. Zhou, \emph{et al.}, ``DR-SAC: Distributionally robust soft actor-critic for reinforcement learning under uncertainty,'' in \emph{Proc. Int. Conf. Learn. Represent. (ICLR)}, 2026.
+
+\bibitem{demirel2025generalization}
+B. Demirel, Y. Wang, \emph{et al.}, ``Generalization in reinforcement learning for radio access networks,'' \emph{IEEE Trans. Mach. Learn. Commun. Netw.}, vol. 4, pp. 351--372, 2026.
+
+\bibitem{luan2025robust}
+D. Luan and J. Thompson, ``Achieving robust channel estimation neural networks by designed training data,'' \emph{IEEE Trans. Cogn. Commun. Netw.}, 2025.
+
+\bibitem{zhu2025lyapguid}
+B. Zhu, L. Huang, \emph{et al.}, ``Enhancing energy efficiency in wireless-powered MEC systems through Lyapunov-guided deep reinforcement learning,'' \emph{IEEE Trans. Wireless Commun.}, vol. 24, no. 9, pp. 7563--7580, Sep. 2025.
+
+\bibitem{neely2010stochastic}
+M. J. Neely, \emph{Stochastic Network Optimization with Application to Communication and Queueing Systems}. San Rafael, CA, USA: Morgan \& Claypool, 2010.
+
+\bibitem{zakeri2024lyaplearn}
+A. Zakeri, M. Moltafet, \emph{et al.}, ``Minimizing the AoI in resource-constrained multi-source relaying systems: Dynamic and learning-based scheduling,'' \emph{IEEE Trans. Wireless Commun.}, vol. 23, no. 1, pp. 450--466, Jan. 2024.
+
+\bibitem{khosravi2025practical}
+S. Khosravi, B. Demirel, \emph{et al.}, ``Practical policy distillation for reinforcement learning in radio access networks,'' in \emph{Proc. IEEE Int. Symp. Pers. Indoor Radio Commun. (PIMRC)}, 2025.
+
+\bibitem{plackett1975}
+J. A. Plackett, ``The analysis of permutations,'' \emph{Appl. Statist.}, vol. 24, no. 2, pp. 193--202, 1975.
+
+\bibitem{luce1959}
+R. D. Luce, \emph{Individual Choice Behavior}. New York, NY, USA: Wiley, 1959.
+
+\bibitem{dinkelbach1967}
+W. Dinkelbach, ``On nonlinear fractional programming,'' \emph{Manage. Sci.}, vol. 13, no. 7, pp. 492--498, 1967.
+
+\bibitem{zhang2023pporsma}
+R. Zhang, K. Xiong, \emph{et al.}, ``Energy efficiency maximization in RIS-assisted SWIPT networks with RSMA: A PPO-based approach,'' \emph{IEEE J. Sel. Areas Commun.}, vol. 41, no. 5, pp. 1413--1430, May 2023.
+
+\bibitem{sutton1999policy}
+R. S. Sutton, D. McAllester, \emph{et al.}, ``Policy gradient methods for reinforcement learning with function approximation,'' in \emph{Adv. Neural Inf. Process. Syst. (NeurIPS)}, 1999.
+
+\bibitem{he2023eemumimo}
+P. He, A. Anpalagan, and W. Ejaz, ``Energy-efficient power allocation maximization for MU-MIMO multiple access channels,'' \emph{IEEE Trans. Wireless Commun.}, vol. 22, no. 5, pp. 3460--3471, May 2023.
+
+\bibitem{wang2023nomaee}
+K. Wang, T. Zhou, \emph{et al.}, ``Fairness-aware energy-efficient power allocation for uplink NOMA systems with imperfect SIC,'' \emph{IEEE Wireless Commun. Lett.}, vol. 12, no. 12, pp. 2018--2022, Dec. 2023.
+
+\bibitem{falloun2025fixedpa}
+A. Falloun and A. Ait Madi, ``Fixed and fair power allocation in downlink and uplink NOMA: Outage probability analysis and bit error rate comparative study,'' \emph{Bull. Electr. Eng. Inform.}, vol. 14, no. 5, pp. 3509--3519, Oct. 2025.
+
 \end{thebibliography}
 
 \end{document}

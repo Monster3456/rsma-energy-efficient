@@ -495,6 +495,23 @@ overloaded instance from scratch; together with bc_init (7/7 from pure
 distillation) this localizes the enabling ingredient to **expert initialization**,
 not to the reward family or the hierarchy alone.
 
+**Classic continuous-control family (TD3/DDPG).** We add the review-standard
+TD3/DDPG pair, adapted to the mixed PL+continuous action space (deterministic pathwise
+actor through the differentiable $tanh(\mu)$ continuous head, greedy PL order;
+twin-Q TD targets with target-policy smoothing and a delayed actor for TD3, single
+Q for DDPG; single-timescale, no distillation, no guard). **TD3** clears 0/7 gates
+(mean delivery 0.818 at a saturated 24 W transmit power, low-SNR points fail);
+**DDPG** reaches 5/7 (mean delivery 0.886) but still misses the two low-SNR gates
+{0, 5} dB on both delivery and queue. Both fall below the distilled policy
+(bc_init 7/7, 0.9441) and confirm the LDPTRLQ pattern: from-scratch RL cannot
+solve this overloaded instance, whatever the algorithm family.
+
+**Optimization-depth check (JointOpt).** A per-slot optimizer with **60
+warm-started** Adam steps (vs DiffOpt's 25 cold-start) scores *below* DiffOpt at
+every point (mean 0.913 vs 0.957, ≈13 W): the model-based upper bound is **not
+step- or warm-start-limited**—cold-start 25-step DiffOpt is already a tight bound,
+consistent with the earlier warm-vs-cold diagnostics.
+
 ### F. Checkpoint selection matters
 
 The seed-44 episode exposes a subtle evaluation pathology: a legacy 3-point

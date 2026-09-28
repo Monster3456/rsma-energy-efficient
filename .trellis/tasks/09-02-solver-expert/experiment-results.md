@@ -667,3 +667,27 @@ E1/E2 官方评估出分并完成 M5.3 终审之后。若 E 证明挖掘有效 �
   作为"经典 RL 从零无法解决过载实例"的又一反证记录；不因失败改判任何既有结论
 - 内存受限调度：TD3 现在起；DDPG 待 JointOpt 评估（~14h）结束自动续起
 - 结果待补
+
+### 经典族 + 上界检验终审（2026-09-27 回填）
+
+- **JointOpt（60 步 warm-start，官方 7×50，`logs/_eval_jointopt2.txt`）**：mean 0.913，
+  逐点全部低于 DiffOpt（0dB 0.776 vs 0.894 … 30dB 0.872 vs 0.905），功率 ~13W
+  ⇒ **上界不步数/温起受限，冷启 25 步 DiffOpt 即紧上界**（与 M2 warm<cold 一致）；负结论定稿
+- **TD3（官方 7×50，`logs/_eval_td3_final.txt`）**：恒满功率 24W，mean 0.818，
+  低 SNR 门失守 ⇒ 0/7，与 LDPTRLQ 同族的经典连续控制倒数第二反证
+- **DDPG**：8000ep 训练收官（`logs/comp_ddpg/`）；官方评估进行中
+  （`logs/_eval_ddpg_final.txt`，~1-2h）→ 补表 III + 三件套完整
+- 补丁：`train_td3ddpg.py` 保存键兼容标准管道；新增 `scripts/baselines/eval_actor_baseline.py`
+  通用 ActorCriticAttn 检查点官方网格求值器（冒烟通过）
+- 论文 draft/main §V-E 已加 TD3/DDPG 与 JointOpt 段；主图重生成
+  （`benchmarks_master_new.png` 含 JointOpt/TD3 列）
+
+### DDPG 官方评估终审（2026-09-28 回填）
+
+- **DDPG（7×50，`logs/_eval_ddpg_final.txt`）**：mean **0.886、5/7 门**——0dB/5dB
+  在 delivery 与 queue 双门同时失守；功率 13.6→21.3W（未饱和，经典三件套中最好）
+- 经典三件套终表：**LDPTRLQ 0/7 (0.782) / TD3 0/7 (0.818, 24W 饱和) / DDPG 5/7 (0.886)**
+  ——全部低于 bc_init 7/7 (0.9441)；守恒"从零 RL 无法解决过载实例，必须专家初始化"
+- JointOpt 负结论、TD3 判决、预注册均已落在上文；主图终版含全部对照
+  （`docs/paper/figs/benchmarks_master.png`：seed 带 + diffopt/causal/adaptive/waterfilling/
+  LDPTRLQ/JointOpt/TD3/DDPG + 经典基线）

@@ -193,7 +193,9 @@ def main(argv=None) -> int:
                      "mean_reward": ep_ret / args.T, "delivery": float(deliv)}) + "\n")
             print(f"[{args.algo.upper()}] ep={ep} ret/slot={ep_ret / args.T:.3f} "
                   f"deliv={deliv:.3f} updates={updates}", flush=True)
-            torch.save({"model_state": policy.state_dict(), "obs_dim": obs_dim,
+            torch.save({"model_state": policy.state_dict(),
+                        "worker_state_dict": policy.state_dict(),  # 标准评估管道键
+                        "obs_dim": obs_dim, "action_dim": act_dim,
                         "episode": ep, "delivery": float(deliv)},
                        log_dir / "final.pt")
     print(f"[{args.algo.upper()}] done. ckpt={log_dir / 'final.pt'}")

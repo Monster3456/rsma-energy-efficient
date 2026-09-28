@@ -9,7 +9,9 @@ Three modes:
             in the eval that produced the log, otherwise absent algorithms are skipped)
   ablation  one metric, many checkpoints overlaid, SDMA drawn as the shared reference
   seedband  6-panel figure: baselines from one report + PPO-RSMA mean/min-max envelope
-            over several reports (seed-replication band; draws each member faint)
+            over several reports (seed-replication band; draws each member faint
+            unless --no-member-lines). --exclude drops algorithm columns and
+            --label overrides legend text (used to attach citation numbers).
 
 Examples:
   python scripts/plot_benchmarks.py all --log logs/_eval_bench_all.txt
@@ -20,7 +22,11 @@ Examples:
       --baseline-log logs/_eval_bench_all.txt \
       --ppp-report "champ=logs/_eval_m5_A_bestguard.txt" \
       --ppp-report "S43=logs/_eval_mAdjud_S43_bestguard.txt" \
-      --ppp-report "S44=logs/_eval_mAdjud_S44_bestguard.txt"
+      --ppp-report "S44=logs/_eval_mAdjud_S44_bestguard.txt" \
+      --extra-report LDPTRLQ=logs/_eval_ldptrlq_best.txt \
+      --no-member-lines --exclude EqualPower \
+      --label "SDMA=SDMA [19]" --label "NOMA=NOMA [20]" \
+      --out docs/paper/figs/benchmarks_master.png
 """
 
 from __future__ import annotations
@@ -65,6 +71,9 @@ STYLE = {
     "AdaptivePower": dict(color="#ff7f0e", marker="p", lw=1.6, ms=6, ls="--", zorder=2),
     "WaterFilling": dict(color="#17becf", marker="h", lw=1.6, ms=6, ls=":", zorder=2),
     "LDPTRLQ": dict(color="#8c564b", marker="X", lw=1.8, ms=6, ls="-.", zorder=3),
+    "JointOpt": dict(color="#989898", marker="*", lw=1.8, ms=8, ls=(0, (3, 1, 1, 1)), zorder=2),
+    "TD3": dict(color="#aec7e8", marker="+", lw=1.6, ms=7, ls="-.", zorder=2),
+    "DDPG": dict(color="#98df8a", marker="x", lw=1.6, ms=6, ls=":", zorder=2),
 }
 
 
@@ -148,15 +157,25 @@ def plot_all(log: str, out: str) -> None:
     print(f"wrote {out}")
 
 
-def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str,
-                   extra_reports: list[str] | None = None) -> None:
+def plot_seed_band(
+    baseline_log: str,
+    ppp_reports: list[str],
+    out: str,
+    extra_reports: list[str] | None = None,
+    exclude: list[str] | None = None,
+    labels: dict[str, str] | None = None,
+    member_lines: bool = True,
+) -> None:
     """6-panel figure: classical baselines + PPO-RSMA seed-replication band.
 
     Baselines (SDMA/NOMA/EqualPower) come from `baseline_log`; every `--ppp-report`
     is parsed as one PPO-RSMA replication (TAG=PATH) and drawn as a faint member line,
     with the mean per point and a min-max shaded envelope. `ee` is recomputed from the
-    report's own R_sum / P so member reports need no extra columns.
+    report's own R_sum / P so member reports need no extra columns. `exclude` drops
+    algorithm columns, `labels` overrides legend text (citation numbers), and
+    `member_lines=False` draws only the seed mean plus envelope.
     """
+    labels = labels or {}
     if len(ppp_reports) < 2:
         print("note: fewer than 2 PPO-RSMA reports given; band will collapse to a line")
 
@@ -176,6 +195,7 @@ def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str,
     # ALGO_ORDER first, then any merged-in comparators, in insertion order
     present = [a for a in data_b if any(v is not None for v in data_b[a].get("delivery_ratio", []))]
     algos = [a for a in ALGO_ORDER if a in present] + [a for a in present if a not in ALGO_ORDER]
+    algos = [a for a in algos if a not in set(exclude or [])]
 
     members: list[tuple[str, list[float], dict[str, list[float | None]]]] = []
     for spec in ppp_reports:
@@ -194,47 +214,57 @@ def plot_seed_band(baseline_log: str, ppp_reports: list[str], out: str,
                 continue  # drawn as the band below, not as a bare line
             values = data_b[algo].get(key)
             if values is not None:
-                _plot_series(ax, snrs_b, values, algo, STYLE.get(algo, dict(marker="x")))
+                _plot_series(ax, snrs_b, values, labels.get(algo, algo), STYLE.get(algo, dict(marker="x")))
 
         # per-point mean / min / max across member reports (ignore None per point)
         xs = [s for s in snrs_b if s is not None]
         grid: list[list[float | None]] = [
-            [m[2].get(key, [])[i] if i < len(m[2].get(key, [])) else None for m in members]
-            for i in range(len(xs))
+            [m[2].get(key, [])[i] if i < len(m[2].get(key, [])) else None for m in members] for i in range(len(xs))
         ]
-        mean = [float(np.mean([v for v in col if v is not None])) if any(v is not None for v in col) else None for col in grid]
+        mean = [
+            float(np.mean([v for v in col if v is not None])) if any(v is not None for v in col) else None
+            for col in grid
+        ]
         lo = [min(v for v in col if v is not None) if any(v is not None for v in col) else None for col in grid]
         hi = [max(v for v in col if v is not None) if any(v is not None for v in col) else None for col in grid]
         pts = [s for s, m in zip(xs, mean) if m is not None]
-        ax.plot(pts, [m for m in mean if m is not None], label=f"PPO-RSMA ({len(members)} seeds, mean)", **STYLE["PPO-RSMA"])
+        ax.plot(
+            pts,
+            [m for m in mean if m is not None],
+            label=labels.get("PPO-RSMA", f"PPO-RSMA ({len(members)} seeds, mean)"),
+            **STYLE["PPO-RSMA"],
+        )
         # faint member lines
-        for tag, _, data_m in members:
-            vals = data_m.get(key, [])
-            _plot_series(
-                ax, xs, vals,
-                f"member {tag}",
-                dict(color="#d62728", marker="o", lw=1.0, ms=3, alpha=0.25, zorder=2),
-            )
+        if member_lines:
+            for tag, _, data_m in members:
+                vals = data_m.get(key, [])
+                _plot_series(
+                    ax,
+                    xs,
+                    vals,
+                    f"member {tag}",
+                    dict(color="#d62728", marker="o", lw=1.0, ms=3, alpha=0.25, zorder=2),
+                )
         # min-max envelope
         lo_pts = [s for s, v in zip(xs, lo) if v is not None]
         hi_pts = [s for s, v in zip(xs, hi) if v is not None]
         if lo_pts and hi_pts:
-            ax.fill_between(xs, [v if v is not None else float("nan") for v in lo],
-                            [v if v is not None else float("nan") for v in hi],
-                            color="#d62728", alpha=0.15, zorder=1,
-                            label="min–max seed envelope")
+            ax.fill_between(
+                xs,
+                [v if v is not None else float("nan") for v in lo],
+                [v if v is not None else float("nan") for v in hi],
+                color="#d62728",
+                alpha=0.15,
+                zorder=1,
+                label="min–max seed envelope",
+            )
 
-        ax.set_title(f"{title}\n({note})", fontsize=11)
+        ax.set_ylabel(title)
         ax.set_xlabel("SNR (dB)")
         ax.grid(True, alpha=0.3)
         ax.set_xticks(snrs_b)
-        ax.legend(fontsize=8, loc="best")
-    fig.suptitle(
-        "RSMA uplink energy-efficient scheduling — benchmark with PPO-RSMA seed-replication band\n"
-        f"(imperfect CSI, 50 episodes/SNR point, source: {Path(baseline_log).name})",
-        fontsize=13,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+        ax.legend(fontsize=9, loc="best")
+    fig.tight_layout()
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     print(f"wrote {out}")
@@ -271,7 +301,6 @@ def plot_ablation(specs: list[str], metric: str, out: str) -> None:
             dict(color="#1f77b4", marker="s", ls="--", lw=2.6, ms=8, zorder=6),
         )
     title = "Energy efficiency  R_sum / P" if metric == "ee" else metric
-    ax.set_title(f"{title} vs SNR — checkpoint ablation", fontsize=13)
     ax.set_xlabel("SNR (dB)")
     ax.set_ylabel(title)
     ax.grid(True, alpha=0.3)
@@ -297,15 +326,52 @@ def main(argv: list[str] | None = None) -> int:
 
     p_bb = sub.add_parser("seedband", help="baselines + PPO-RSMA seed-replication band")
     p_bb.add_argument("--baseline-log", required=True, help="eval report with baseline columns (SDMA/NOMA/EqualPower)")
-    p_bb.add_argument("--ppp-report", action="append", required=True, help="TAG=PATH of a PPO-RSMA eval report, repeatable")
-    p_bb.add_argument("--extra-report", action="append", help="PATH or TAG=PATH of an additional eval report merged into the figure; TAG=PATH renames its PPO-RSMA column to TAG (for trained baselines), repeatable")
+    p_bb.add_argument(
+        "--ppp-report", action="append", required=True, help="TAG=PATH of a PPO-RSMA eval report, repeatable"
+    )
+    p_bb.add_argument(
+        "--extra-report",
+        action="append",
+        help="PATH or TAG=PATH of an additional eval report merged into the figure; TAG=PATH renames its PPO-RSMA column to TAG (for trained baselines), repeatable",
+    )
+    p_bb.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="algorithm column to omit from the figure entirely, repeatable",
+    )
+    p_bb.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        help="ALGO=LEGEND TEXT override for a curve label, repeatable (e.g. SDMA='SDMA [19]')",
+    )
+    p_bb.add_argument(
+        "--no-member-lines",
+        action="store_true",
+        help="draw only the seed mean and min-max envelope, not the faint per-member lines",
+    )
     p_bb.add_argument("--out", default="logs/figs/benchmarks_seed_band.png")
 
     args = ap.parse_args(argv)
     if args.mode == "all":
         plot_all(args.log, args.out)
     elif args.mode == "seedband":
-        plot_seed_band(args.baseline_log, args.ppp_report, args.out, args.extra_report)
+        labels = {}
+        for spec in args.label:
+            tag, sep, text = spec.partition("=")
+            if not sep:
+                raise SystemExit(f"--label must be ALGO=TEXT, got {spec!r}")
+            labels[tag] = text
+        plot_seed_band(
+            args.baseline_log,
+            args.ppp_report,
+            args.out,
+            args.extra_report,
+            exclude=args.exclude,
+            labels=labels,
+            member_lines=not args.no_member_lines,
+        )
     else:
         plot_ablation(args.spec, args.metric, args.out)
     return 0

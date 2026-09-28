@@ -653,7 +653,27 @@ solve this overloaded instance, whatever the algorithm family.
 warm-started Adam steps (vs.\ DiffOpt's 25 cold-start) scores below DiffOpt at
 every point (mean 0.913 vs.\ 0.957, $\approx$13\,W): the model-based upper bound
 is not step- or warm-start-limited---cold-start 25-step DiffOpt is already tight,
-consistent with the earlier warm-vs-cold diagnostics.
+consistent with the earlier warm-vs-cold diagnostics. Table~\ref{tab:classic}
+summarizes the comparators.
+
+\begin{table}[t]
+\centering
+\caption{Classic-family and optimization-depth comparators (official 7$\times$50, imperfect CSI).}
+\label{tab:classic}
+\begin{tabular}{l|c|c|c|c}
+\toprule
+Comparator & points & mean deliv & 30\,dB deliv & P (W) \\
+\midrule
+DiffOpt / DiffOptCausal (upper bound) & 7/7 & 0.957 & 0.905 & 13.4--14.6 \\
+Champion SFTP (deliverable, ref) & 7/7 & 0.9519 & 0.888 & 13.5--14.6 \\
+bc\_init (distillation, ref) & 7/7 & 0.9441 & 0.871 & 13.7 \\
+JointOpt (60-step warm-start) & 5/7 & 0.913 & 0.872 & $\approx$13 \\
+DDPG & 5/7 & 0.886 & 0.792 & 13.6--21.3 \\
+TD3 & 0/7 & 0.818 & 0.706 & 24 (sat.) \\
+LDPTRLQ & 0/7 & 0.782 & 0.595 & $\approx$23 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Checkpoint selection matters}
 The seed-44 episode exposes an evaluation pathology: a legacy 3-point mini-eval

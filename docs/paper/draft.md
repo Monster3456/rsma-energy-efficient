@@ -512,6 +512,18 @@ every point (mean 0.913 vs 0.957, ≈13 W): the model-based upper bound is **not
 step- or warm-start-limited**—cold-start 25-step DiffOpt is already a tight bound,
 consistent with the earlier warm-vs-cold diagnostics.
 
+**TABLE IV — Classic-family and optimization-depth comparators (official 7×50).**
+
+| Comparator | points | mean deliv | 30 dB | P (W) |
+|---|---|---|---|---|
+| DiffOpt / DiffOptCausal (upper bound) | 7/7 | **0.957** | 0.905 | 13.4–14.6 |
+| Champion SFTP (deliverable, ref) | 7/7 | 0.9519 | 0.888 | 13.5–14.6 |
+| bc_init (distillation, ref) | 7/7 | 0.9441 | 0.871 | 13.7 |
+| JointOpt (60-step warm-start) | 5/7 | 0.913 | 0.872 | ≈13 |
+| DDPG | 5/7 | 0.886 | 0.792 | 13.6–21.3 |
+| TD3 | 0/7 | 0.818 | 0.706 | 24 (sat.) |
+| LDPTRLQ | 0/7 | 0.782 | 0.595 | ≈23 |
+
 ### F. Checkpoint selection matters
 
 The seed-44 episode exposes a subtle evaluation pathology: a legacy 3-point

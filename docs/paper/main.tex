@@ -123,6 +123,19 @@ allocation itself; policy-distillation practice in RANs~\cite{khosravi2025practi
 motivates our teacher$\to$student design but does not couple distillation to
 per-slot combinatorial refinement under hard per-point gates.
 
+Related lines of work span: expert-driven imitation and expert iteration
+\cite{pomerleau1989alvinn,ross2011dagger,rusu2016policydistill,anthony2017exit,silver2016alphago};
+deep-RL foundations for continuous control and discrete optimisers
+\cite{williams1992reinforce,mnih2015dqn,schulman2015trpo,haarnoja2018sac,hasselt2016doubleq,sutton2018book};
+queue-stability and cross-layer scheduling theory
+\cite{tassiulas1992stability,georgiadis2006tutorial};
+RSMA and NOMA rate-region analysis
+\cite{mao2018rsma,clerckx2016rate,clerckx2021openoma};
+deep-learning and deep-RL resource allocation in wireless systems
+\cite{liang2019v2v,luong2019drlcomm,zhang2019mlwireless};
+and fractional-programming tools for communication EE
+\cite{dinkelbach1967,shen2018fractional}.
+
 \emph{Contributions.} (i) We formalize EE maximization for overloaded RSMA
 MU-MIMO uplink under per-SNR-point delivery and queue constraints relative to
 SDMA, with a lexicographic criterion isolating the binding constraints.
@@ -780,7 +793,7 @@ history $H=4$. PPO: clip 0.1, rollout 2048, batch 64, 8 epochs, actor lr 3e-5,
 GAE 0.95. Expert: Adam 25 steps lr 0.1 cold-start, 8{,}000 demos. Guard v2:
 6 points $\times$ 16 episodes + queue bar.
 
-\begin{thebibliography}{22}
+\begin{thebibliography}{41}
 
 \bibitem{yu2022robust}
 D. Yu, S.-H. Park, \emph{et al.}, ``Robust design of rate-splitting multiple access with imperfect CSI for cell-free MIMO systems,'' in \emph{Proc. IEEE ICC Workshops}, May 2022, pp. 604--609.
@@ -847,6 +860,63 @@ S. Fujimoto, H. van Hoof, and D. Meger, ``Addressing function approximation erro
 
 \bibitem{lillicrap2016ddpg}
 T. P. Lillicrap \emph{et al.}, ``Continuous control with deep reinforcement learning,'' in \emph{Proc. Int. Conf. Learning Representations (ICLR)}, 2016.
+
+\bibitem{pomerleau1989alvinn}
+D. A. Pomerleau, ``Alvinn: An autonomous land vehicle in a neural network,'' in \emph{Adv. Neural Inf. Process. Syst. (NeurIPS)}, 1989.
+
+\bibitem{ross2011dagger}
+S. Ross, G. J. Gordon, and D. Bagnell, ``A reduction of imitation learning and structured prediction to no-regret online learning,'' in \emph{Proc. AISTATS}, 2011, pp.~627--635.
+
+\bibitem{rusu2016policydistill}
+A. A. Rusu \emph{et al.}, ``Policy distillation,'' in \emph{Proc. Int. Conf. Learn. Representations (ICLR)}, 2016.
+
+\bibitem{anthony2017exit}
+T. Anthony, Z. Tian, and D. Barber, ``Thinking fast and slow with deep learning and tree search,'' \emph{arXiv:1705.08439}, 2017.
+
+\bibitem{silver2016alphago}
+D. Silver \emph{et al.}, ``Mastering the game of Go with deep neural networks and tree search,'' \emph{Nature}, vol.~529, no.~7587, pp.~484--489, 2016.
+
+\bibitem{williams1992reinforce}
+R. J. Williams, ``Simple statistical gradient-following algorithms for connectionist reinforcement learning,'' \emph{Machine Learning}, vol.~8, pp.~229--256, 1992.
+
+\bibitem{mnih2015dqn}
+V. Mnih \emph{et al.}, ``Human-level control through deep reinforcement learning,'' \emph{Nature}, vol.~518, pp.~529--533, 2015.
+
+\bibitem{schulman2015trpo}
+J. Schulman, S. Levine, P. Abbeel, M. Jordan, and P. Moritz, ``Trust region policy optimization,'' in \emph{Proc. Int. Conf. Machine Learning (ICML)}, 2015.
+
+\bibitem{haarnoja2018sac}
+T. Haarnoja \emph{et al.}, ``Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor,'' in \emph{Proc. Int. Conf. Machine Learning (ICML)}, 2018.
+
+\bibitem{hasselt2016doubleq}
+H. van Hasselt, A. Guez, and D. Silver, ``Deep reinforcement learning with double Q-learning,'' in \emph{Proc. AAAI Conf. Artif. Intell.}, 2016.
+
+\bibitem{sutton2018book}
+R. S. Sutton and A. G. Barto, \emph{Reinforcement Learning: An Introduction}, 2nd ed. MIT Press, 2018.
+
+\bibitem{tassiulas1992stability}
+L. Tassiulas and A. Ephremides, ``Stability properties of constrained queueing systems and scheduling policies for maximum throughput in multihop radio networks,'' \emph{IEEE Trans. Autom. Control}, vol.~37, no.~12, pp.~1936--1948, 1992.
+
+\bibitem{georgiadis2006tutorial}
+L. Georgiadis, M. J. Neely, and L. Tassiulas, ``Resource allocation and cross-layer control in wireless networks,'' \emph{Found. Trends Netw.}, vol.~1, no.~1, pp.~1--144, 2006.
+
+\bibitem{mao2018rsma}
+Y. Mao, B. Clerckx, and V. O. K. Li, ``Rate-splitting multiple access for downlink communication systems: Bridging, generalizing, and outperforming SDMA and NOMA,'' \emph{EURASIP J. Wirel. Commun. Netw.}, 2018.
+
+\bibitem{clerckx2021openoma}
+B. Clerckx, Y. Mao, E. A. Jorswieck, \emph{et al.}, ``Is NOMA efficient in multi-antenna networks? A critical look at next generation multiple access techniques,'' \emph{IEEE Open J. Commun. Soc.}, vol.~2, pp.~1310--1343, 2021.
+
+\bibitem{liang2019v2v}
+L. Liang, H. Ye, and G. Y. Li, ``Deep reinforcement learning for resource allocation in V2V communications,'' \emph{IEEE Trans. Veh. Technol.}, vol.~68, no.~9, pp.~8543--8553, 2019.
+
+\bibitem{luong2019drlcomm}
+N. C. Luong \emph{et al.}, ``Applications of deep reinforcement learning in communications and networking: A survey,'' \emph{IEEE Commun. Surveys Tuts.}, vol.~21, no.~4, pp.~3133--3174, 2019.
+
+\bibitem{zhang2019mlwireless}
+C. Zhang, P. Patras, and H. Haddadi, ``Deep learning in mobile and wireless networking: A survey,'' \emph{IEEE Commun. Surveys Tuts.}, vol.~21, no.~3, pp.~2224--2287, 2019.
+
+\bibitem{shen2018fractional}
+K. Shen and W. Yu, ``Fractional programming for communication systems---Part I: Power control and beamforming,'' \emph{IEEE Trans. Signal Process.}, vol.~66, no.~10, pp.~2616--2630, 2018.
 
 \end{thebibliography}
 

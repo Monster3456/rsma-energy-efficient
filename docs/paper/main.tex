@@ -684,8 +684,18 @@ solve this overloaded instance, whatever the algorithm family.
 warm-started Adam steps (vs.\ DiffOpt's 25 cold-start) scores below DiffOpt at
 every point (mean 0.913 vs.\ 0.957, $\approx$13\,W): the model-based upper bound
 is not step- or warm-start-limited---cold-start 25-step DiffOpt is already tight,
-consistent with the earlier warm-vs-cold diagnostics. Table~\ref{tab:classic}
-summarizes the comparators.
+consistent with the earlier warm-vs-cold diagnostics.
+
+\emph{Information-set vs.\ computation budget.} The policy's deficit against
+DiffOpt could stem from (i) the oracle (true-channel) information in the solver's
+surrogate or (ii) the per-slot optimization budget. Table~\ref{tab:classic}
+separates both axes: the causal variant (surrogate restricted to the estimated
+channel $\hat{\vect{H}}$) reproduces the oracle variant point-for-point at 50
+episodes ($\max|\Delta|\le 0.001$), and the deeper 60-step warm-started JointOpt
+scores \emph{below} the 25-step cold-start DiffOpt (0.913 vs.\ 0.957). The gap to
+the oracle is therefore intrinsic to replacing per-slot online optimization with
+a single shared forward pass---it is neither an information-set nor a step-budget
+artifact.
 
 \begin{table*}[t]
 \centering
@@ -732,6 +742,41 @@ $\approx$0.6\% compression gap below the oracle---the quantified cost of
 per-slot-online-optimization-free inference. Baselines are single-seed (seed
 42); our recipe's multi-seed dispersion is reported in the seed-replication
 subsection.
+
+\subsection{Complexity and implementation cost}
+Table~\ref{tab:complex} lists asymptotic per-slot cost and measured runtime on
+the reference machine (8\,GB GPU, 20-thread CPU). The worker is a 2-layer,
+4-head self-attention graph network; a forward pass costs
+$O(K\,d^2 + K^2) + O(4K\,h)$ for the attention and per-user output heads, and
+the meta-controller adds $O(K\,d_m^2 + K^2)$ every $T_s{=}20$ slots. One PPO
+update is $O(B\,E\,(d^2+K))$ with batch $B{=}64$ and $E{=}8$ epochs. DiffOpt
+spends 25 Adam steps on power logits plus two decoding-order candidates through
+the MMSE-SIC shadow engine, $O(25\,N_r^2K + N_r K^2)$, measured at
+$\approx$0.26\,s/slot. The learned policy replaces this with a single
+$\approx$19\,ms forward pass (rollout FPS 54, environment step included)---a
+$\approx$14$\times$ inference saving with no runtime dependence on the rate
+model. One 8{,}000-episode run takes $\approx$8 GPU-h; the five-seed report uses
+$\approx$40 GPU-h plus the CPU-only official evaluation grid.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Asymptotic and measured complexity (per slot unless noted).}
+\label{tab:complex}
+\begin{tabular}{l|l|c}
+\toprule
+Operation & Asymptotic cost & Measured \\
+\midrule
+Worker forward (SA-GAT) & $O(K\,d^2 + K^2 + 4Kh)$ & $\approx$19\,ms \\
+Meta decision (every $T_s$) & $O(K\,d_m^2 + K^2)$ & negligible \\
+PPO update & $O(B\,E\,(d^2+K))$ & per rollout \\
+DiffOpt (per slot) & $O(25\,N_r^2 K + N_r K^2)$ & $\approx$0.26\,s \\
+Ours vs DiffOpt saving & --- & $\approx$14$\times$ \\
+Training (8{,}000 ep) & --- & $\approx$8 GPU-h / arm \\
+\textbf{Ours: 5-seed total} & --- & $\approx$40 GPU-h \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Discussion}
 \label{sec:discussion}

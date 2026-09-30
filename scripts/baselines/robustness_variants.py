@@ -104,9 +104,29 @@ def inject(env, args) -> None:
         env.channel._H_ray = None
         env.channel._H_los = None
     if args.traffic == "mmpp":
-        _bind_instance_methods(env.traffic, MMPPTraffic, ("reset", "step"))
-        env.traffic._mmpp_rng = np.random.default_rng(31337)
-        env.traffic._state = None
+        tr = env.traffic
+        tr._mmpp_rng = np.random.default_rng(31337)
+        tr._state = None
+        base_reset, base_step = tr.reset, tr.step
+
+        def _tr_reset():
+            base_reset()
+            tr._state = tr._mmpp_rng.integers(0, 2, size=tr.K)
+
+        def _tr_step(served_bits):
+            if getattr(tr, "_state", None) is None:
+                tr._state = np.zeros(tr.K, dtype=int)
+            stay = np.where(tr._state == 0, 1.0 - 1.0 / 40.0, 1.0 - 1.0 / 20.0)
+            jump = tr._mmpp_rng.random(tr.K) > stay
+            tr._state = np.where(jump, 1 - tr._state, tr._state)
+            mult = np.where(tr._state == 0, 0.5, 2.0)
+            base = np.asarray(tr.lambda_per_user, dtype=float)
+            tr.lambda_per_user = base * mult
+            out = base_step(served_bits)
+            tr.lambda_per_user = base  # 恢复到相对基线的 λ（burst 只作用于本 episode）
+            return out
+
+        tr.reset, tr.step = _tr_reset, _tr_step
 
 
 def set_history_window(cfg, window: int) -> None:

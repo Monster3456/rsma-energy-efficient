@@ -691,3 +691,12 @@ E1/E2 官方评估出分并完成 M5.3 终审之后。若 E 证明挖掘有效 �
 - JointOpt 负结论、TD3 判决、预注册均已落在上文；主图终版含全部对照
   （`docs/paper/figs/benchmarks_master.png`：seed 带 + diffopt/causal/adaptive/waterfilling/
   LDPTRLQ/JointOpt/TD3/DDPG + 经典基线）
+
+### SAC 经典三件套补全预注册（2026-10-01 启动）
+
+- 目的：补 SAC（Haarnoja 2018）完成 TD3/DDPG/SAC 经典连续控制闭环；审稿人最常点名基线
+- 配方：`scripts/baselines/train_drsac.py --no-perturb`（去掉 DR 最坏情况循环 = 标准 SAC，
+  熵温度 α 保留），8000ep seed 42 cuda，无层次/蒸馏/守卫（与 LDPTRLQ/TD3/DDPG 同族协议）
+- 判定（预注册）：与 TD3/DDPG 同基准——若 <7 点或 ≤bc_init，作为从零 RL 反证链第四点如实记录
+- 评估：`eval_actor_baseline.py` 官方 7×50 → 并入表 IV（含 [Haarnoja18] 引文）+ §V-E 摘要句
+- 结果待补

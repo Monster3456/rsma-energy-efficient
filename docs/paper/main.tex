@@ -673,10 +673,11 @@ hierarchy alone.
 pair, adapted to the mixed PL+continuous action space (deterministic pathwise
 actor through the differentiable $\tanh(\mu)$ continuous head, greedy PL order;
 twin-Q TD targets with target-policy smoothing and a delayed actor for TD3, single
-Q for DDPG; single-timescale, no distillation, no guard): TD3 clears 0/7 gates
-(mean delivery 0.818 at a saturated 24\,W transmit power, low-SNR points fail);
-DDPG reaches 5/7 (mean delivery 0.886) but still misses the two low-SNR gates
-$\{0,5\}$\,dB on both delivery and queue. Both fall below the distilled policy
+Q for DDPG; twin-Q for TD3/SAC; single-timescale, no distillation, no guard):
+TD3 clears 0/7 gates (mean delivery 0.818 at a saturated 24\,W transmit power),
+SAC also 0/7 (mean 0.787, its per-point queues exceed the gate at every SNR),
+and DDPG reaches 5/7 (mean 0.886) but still misses the two low-SNR gates
+$\{0,5\}$\,dB on both delivery and queue. All fall below the distilled policy
 (bc\_init 7/7, 0.9441) and confirm the LDPTRLQ pattern: from-scratch RL cannot
 solve this overloaded instance, whatever the algorithm family.
 
@@ -711,6 +712,7 @@ bc\_init (distillation, ours) & 7/7 & 0.9441 & 0.871 & 13.7 \\
 DiffOpt / causal (oracle teacher upper bound, ours)$^\dagger$ & 7/7 & 0.957 & 0.905 & 13.4--14.6 \\
 JointOpt (60-step warm, ours) & 5/7 & 0.913 & 0.872 & $\approx$13 \\
 DDPG~\cite{lillicrap2016ddpg} & 5/7 & 0.886 & 0.792 & 13.6--21.3 \\
+SAC~\cite{haarnoja2018sac} & 0/7 & 0.787 & 0.714 & 14.5--18.4 \\
 TD3~\cite{fujimoto2018td3} & 0/7 & 0.818 & 0.706 & 24 (sat.) \\
 LDPTRLQ~\cite{zhu2025lyapguid} & 0/7 & 0.782 & 0.595 & $\approx$23 \\
 \bottomrule

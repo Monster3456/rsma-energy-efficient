@@ -65,7 +65,13 @@ deployment rather than absolute performance. A pre-registered fine-tuning campai
 further shows that released-learning-rate, trust-region, anchoring, and
 data-reshaping variants all fall within the policy's own seed dispersion,
 motivating multi-seed confidence-interval comparison as the honest reporting
-standard for this class of methods.
+standard for this class of methods. Finally, a Shapley-value-based
+interpretability analysis (global feature-subset selection via the SVEA
+classification game, plus expected-gradient attributions validated against a
+model-agnostic KernelSHAP proxy under multiple reference constructions) shows
+that the learned scheduler's power decisions are driven foremost by queue
+backlog and channel gain, with the queue block as the dominant feature across
+operating points.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -935,7 +941,14 @@ report seed dispersion, pre-register gates, treat within-band differences as nul
 \emph{Limitations.} Fixed $K=24,N_r=16$; CPU-costly official evaluation limits
 replication; the expert surrogate inherits the reward's shaping choices; the
 emergent freeze is configuration-dependent and must be re-verified under reward or
-curriculum changes.
+curriculum changes. The interpretability analysis~\S\ref{sec:interp} is
+single-checkpoint and single-seed: the SVEA game uses a linear-surrogate ERM on
+the ``served'' outcome label, and the features constant within a fixed-SNR point
+(arrivals, Lagrangian-bucket, Dinkelbach ratio) carry no FSS information by
+construction; local attributions are reported under an empirical-bootstrap
+reference, chosen because it agrees best with the model-agnostic proxy, but the
+reference choice itself remains a judgment call, as documented
+in~\cite{fernando2019deepshap}.
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -949,7 +962,9 @@ substantially lower transmit power. A pre-registered fine-tuning campaign
 establishes the seed-dispersion floor and sets multi-seed confidence-interval
 comparison as the reporting standard. Future work includes the multi-seed
 freeze-onset response surface and extending the solver expert to jointly refine
-the stream split.
+the stream split, plus extending the interpretability analysis
+(\S\ref{sec:interp}) to per-user, per-slot attributions and to the queue-growth
+outcome label.
 
 \appendix[Key hyperparameters]
 \label{app:hparams}

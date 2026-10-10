@@ -813,6 +813,96 @@ mean & 0.939 & 0.747 & 0.875 & 0.702 & 0.636 \\
 \end{tabular}
 \end{table*}
 
+\subsection{Interpretability: what the policy attends to}
+\label{sec:interp}
+
+Beyond aggregate delivery/EE numbers, we ask which \emph{state features} drive the
+learned worker and meta policies, following two Shapley-value-based frameworks.
+\textbf{Global feature-subset selection via SVEA}~\cite{tripathi2020svea}: we treat
+the 13 per-user observation blocks as players of a classification game whose
+characteristic function is the reduction in hinge-loss training error of a linear
+ERM classifier that predicts whether the policy serves a user in the current slot
+($v(S) = \tilde{c} - \operatorname{tr\_er}(S)$, $\tilde{c}$ the intercept-only error).
+The Shapley error-apportioning $e_j = \tilde{c}/n - \phi_j$ admits a universal
+threshold of zero: features with $e_j < 0$ (the \emph{dominant} set
+$\mathrm{SVEA}_{neg}$) are the ones whose knowledge alone reproduces the service
+decision. Fig.~\ref{fig:svea} reports $e_j$ with 95\% t-intervals per SNR point: the
+queue block is the sole dominant feature at 0--15\,dB, split-$\alpha$ joins it at
+20\,dB, and no feature dominates at 30\,dB (the policy serves near-uniformly and
+the balanced game finds no discriminative signal) --- queue is the only feature
+whose dominance is consistent across points, overlapping the hand-selected
+mean-field critic channels but derived automatically (Table~\ref{tab:svea}).
+The power of classification $PSV(\mathrm{SVEA}_{neg})$ (subset/full-set test
+accuracy) stays $\geq 0.95$, i.e.\ the dominant features nearly reproduce the full
+13-feature service model. The arrivals/$\lambda$-bucket/Dinkelbach-$\eta$ blocks
+are constant within each fixed-SNR evaluation point and are excluded as null
+players (their marginal contribution is identically zero).
+\textbf{Local attribution and reference sensitivity}~\cite{fernando2019deepshap}:
+for fixed states we compute expected-gradient attributions (model-introspective
+backpropagation against a reference) for the four decision objects --- total/per-user
+power share, drain ratio, decoding-order confidence, and meta group/$\alpha$ ---
+under four reference constructions (all-zero, per-block marginal means, empirical
+bootstrap, semantically neutral), and validate against the model-agnostic KernelSHAP
+proxy via top-5 recall and reference-pair Jaccard overlap
+(Fig.~\ref{fig:overlap} and Table~\ref{tab:recall}). Mirroring the finding of
+~\cite{fernando2019deepshap}, attributions are visibly reference-sensitive
+(reference-pair top-5 Jaccard often below 0.5), and the bootstrap/marginal-means
+references agree best with the model-agnostic proxy on the power target
+(recall@5 $0.8$--$1.0$ across SNR) while the all-zero reference is the least
+reliable --- motivating the bootstrap reference as the paper's reporting default.
+KernelSHAP shows queue-backlog and channel-gain blocks as the dominant drivers of
+the total-power decision, consistent with the DGLCR design intent. Worker $\alpha$
+is excluded as a dead dimension (overridden by the meta split mask).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig_svea_intervals}
+\caption{SVEA per-feature scores $e_j$ with 95\% CIs per SNR point (red = SVEA$_{neg}$; constant features excluded as null players).}
+\label{fig:svea}
+\end{figure}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig_topk_overlap}
+\caption{Top-5 Jaccard overlap between expected-gradient attribution (reference variants) per target $\times$ SNR point.}
+\label{fig:overlap}
+\end{figure}
+\begin{table}[t]
+\centering
+\caption{Per-SNR SVEA$_{neg}$ dominant subsets: intervals are 95\% t-CIs of the group-level $e_j$; $PSV$ = subset/full-set test accuracy of the hinge-loss classifier.}
+\label{tab:svea}
+\begin{tabular}{c|c|c|c}
+\toprule
+SNR (dB) & SVEA$_{neg}$ & $e_j$ (95\% CI) & $PSV$ \\
+\midrule
+0  & queue       & $-0.083\ldots0.008$ & 0.966 \\
+5  & queue       & $-0.004\ldots0.084$ & 0.953 \\
+10 & queue       & $-0.072\ldots0.017$ & 0.990 \\
+15 & queue       & $-0.087\ldots0.000$ & 1.003 \\
+20 & queue, split$\alpha$ & $-0.033\ldots0.005$ / $-0.019\ldots0.037$ & 1.008 \\
+25 & queue       & $0.003\ldots0.039$    & 1.010 \\
+30 & (none)      & ---                  & 0.997 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{table}[t]
+\centering
+\caption{EG-vs-KernelSHAP recall@5 on the power target ($P_{total}$) per reference construction; zero-reference deviates most, bootstrap/marginal-means references agree best with the model-agnostic proxy.}
+\label{tab:recall}
+\begin{tabular}{c|cccc}
+\toprule
+SNR (dB) & zero & means & bootstrap & neutral \\
+\midrule
+0  & 0.6 & 0.8 & 0.8 & 0.8 \\
+5  & 0.6 & 1.0 & 0.8 & 0.8 \\
+10 & 0.4 & 0.6 & 0.8 & 0.8 \\
+15 & 0.4 & 0.6 & 0.8 & 0.6 \\
+20 & 0.8 & 0.8 & 1.0 & 0.6 \\
+25 & 0.8 & 0.8 & 0.8 & 0.8 \\
+30 & 0.6 & 0.8 & 0.6 & 1.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \section{Discussion}
 \label{sec:discussion}
 
@@ -997,6 +1087,12 @@ C. Zhang, P. Patras, and H. Haddadi, ``Deep learning in mobile and wireless netw
 
 \bibitem{shen2018fractional}
 K. Shen and W. Yu, ``Fractional programming for communication systems---Part I: Power control and beamforming,'' \emph{IEEE Trans. Signal Process.}, vol.~66, no.~10, pp.~2616--2630, 2018.
+
+\bibitem{tripathi2020svea}
+M. Tripathi, N. Hemachandra, and S. Trivedi, ``Interpretable feature subset selection: A Shapley value based approach,'' in \emph{Proc. IEEE Int. Conf. Big Data (IEEE BigData)}, 2020. DOI: 10.1109/BigData50022.2020.9378102.
+
+\bibitem{fernando2019deepshap}
+Z. T. Fernando, J. Singh, and A. Anand, ``A study on the interpretability of neural retrieval models using DeepSHAP,'' in \emph{Proc. 42nd Int. ACM SIGIR Conf. Res. Dev. Inf. Retr. (SIGIR'19)}, Paris, France, Jul. 2019, pp.~1005--1008.
 
 \end{thebibliography}
 

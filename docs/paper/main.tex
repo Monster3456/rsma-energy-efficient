@@ -779,8 +779,8 @@ $\approx$40 GPU-h plus the CPU-only official evaluation grid.
 
 \begin{table}[t]
 \centering
-\small
-\setlength{\tabcolsep}{4pt}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
 \caption{Asymptotic and measured complexity (per slot unless noted).}
 \label{tab:complex}
 \begin{tabular}{l|l|c}
@@ -901,24 +901,25 @@ or dropping the meta grouping).
 \caption{Top-5 Jaccard overlap between expected-gradient attribution (reference variants) per target $\times$ SNR point.}
 \label{fig:overlap}
 \end{figure}
-\begin{table}[t]
+\begin{table*}[t]
 \centering
+\small
 \caption{Per-SNR SVEA$_{neg}$ dominant subsets: intervals are 95\% t-CIs of the group-level $e_j$; $PSV$ = subset/full-set test accuracy of the hinge-loss classifier.}
 \label{tab:svea}
 \begin{tabular}{c|c|c|c}
 \toprule
 SNR (dB) & SVEA$_{neg}$ & $e_j$ (95\% CI) & $PSV$ \\
 \midrule
-0  & queue       & $-0.083\ldots0.008$ & 0.966 \\
-5  & queue       & $-0.004\ldots0.084$ & 0.953 \\
-10 & queue       & $-0.072\ldots0.017$ & 0.990 \\
-15 & queue       & $-0.087\ldots0.000$ & 1.003 \\
-20 & queue, split$\alpha$ & $-0.033\ldots0.005$ / $-0.019\ldots0.037$ & 1.008 \\
-25 & queue       & $0.003\ldots0.039$    & 1.010 \\
-30 & (none)      & ---                  & 0.997 \\
+0  & queue        & $-0.083\ldots0.008$       & 0.966 \\
+5  & queue        & $-0.004\ldots0.084$       & 0.953 \\
+10 & queue        & $-0.072\ldots0.017$       & 0.990 \\
+15 & queue        & $-0.087\ldots0.000$       & 1.003 \\
+20 & queue,\\split$\alpha$ & $-0.033\ldots0.005$ / $-0.019\ldots0.037$ & 1.008 \\
+25 & queue        & $0.003\ldots0.039$         & 1.010 \\
+30 & (none)       & ---                        & 0.997 \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 \begin{table}[t]
 \centering
 \caption{EG-vs-KernelSHAP recall@5 on the power target ($P_{total}$) per reference construction; zero-reference deviates most, bootstrap/marginal-means references agree best with the model-agnostic proxy.}

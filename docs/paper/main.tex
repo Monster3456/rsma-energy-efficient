@@ -673,8 +673,8 @@ compression gap ($\to$ 0.9519). The learned policy's remaining value is inferenc
 cost and model-free deployment (one forward pass per slot vs.\ 25 optimization
 steps with an explicit rate model), not absolute performance. Earlier ``RL
 surpasses the teacher'' wording is withdrawn: RL surpasses the \emph{distilled
-student} (BC), not the live optimizer, which was never officially evaluated until
-now.
+student} (BC), not the live optimizer, which had not previously been evaluated on
+the official grid.
 
 \emph{Trained recent-family comparator.} A single-timescale Lyapunov
 drift-plus-penalty RL baseline in the LDPTRLQ family~\cite{zhu2025lyapguid} (PPO
@@ -686,14 +686,14 @@ together with bc\_init (7/7 from pure distillation) this localizes the enabling
 ingredient to \emph{expert initialization}, not to the reward family or the
 hierarchy alone.
 
-\emph{Classic continuous-control family (TD3/DDPG).} The review-standard TD3/DDPG
-pair, adapted to the mixed PL+continuous action space (deterministic pathwise
-actor through the differentiable $\tanh(\mu)$ continuous head, greedy PL order;
-twin-Q TD targets with target-policy smoothing and a delayed actor for TD3, single
-Q for DDPG; twin-Q for TD3/SAC; single-timescale, no distillation, no guard):
-TD3 clears 0/7 gates (mean delivery 0.818 at a saturated 24\,W transmit power),
-SAC also 0/7 (mean 0.787, its per-point queues exceed the gate at every SNR),
-and DDPG reaches 5/7 (mean 0.886) but still misses the two low-SNR gates
+\emph{Classic continuous-control family (TD3/DDPG/SAC).} The review-standard
+TD3/DDPG pair plus SAC, adapted to the mixed PL+continuous action space
+(deterministic pathwise actor through the differentiable $\tanh(\mu)$ continuous
+head and greedy PL order; twin-Q TD targets with target-policy smoothing and a
+delayed actor for TD3, single-Q for DDPG; single-timescale, no distillation, no
+guard): TD3 clears 0/7 gates (mean delivery 0.818 at a saturated 24\,W transmit
+power), SAC also 0/7 (mean 0.787, its per-point queues exceed the gate at every
+SNR), and DDPG reaches 5/7 (mean 0.886) but still misses the two low-SNR gates
 $\{0,5\}$\,dB on both delivery and queue. All fall below the distilled policy
 (bc\_init 7/7, 0.9441) and confirm the LDPTRLQ pattern: from-scratch RL cannot
 solve this overloaded instance, whatever the algorithm family.

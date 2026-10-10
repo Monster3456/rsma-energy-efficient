@@ -860,6 +860,23 @@ KernelSHAP shows queue-backlog and channel-gain blocks as the dominant drivers o
 the total-power decision, consistent with the DGLCR design intent. Worker $\alpha$
 is excluded as a dead dimension (overridden by the meta split mask).
 
+The remaining three decision objects are \emph{near-state-invariant} in the
+distilled policy: attributions for them are effectively zero, and direct rollout
+statistics confirm the mechanism rather than an artifact of the attribution.
+The drain ratio saturates at $d_k \equiv 1$ at every point ($\mathrm{std} < 10^{-4}$
+across all 16{,}800 slots), the decoding order's top choice repeats only
+$\approx$0.15--0.19 of the time (vs.\ $1/24$ uniform), i.e.\ the softmax
+confidence on the top user is feature-flat even though the order is weakly
+structured, and the meta controller places essentially all users in a single
+group ($\approx$1--2 groups per slot) with a near-constant split
+$\alpha \approx 0.15$--0.20 whose variance grows only at 30\,dB. The power
+allocation is therefore the \emph{only} strongly state-driven learned decision;
+the drain/order/grouping heads sit at learned default values, indicating that
+the SFTP distillation compressed the optimizer's power behavior into the policy
+and the other action heads kept their initialization-scale defaults --- a
+concrete simplification opportunity for the architecture (fixed drain/order,
+or dropping the meta grouping).
+
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{fig_svea_intervals}

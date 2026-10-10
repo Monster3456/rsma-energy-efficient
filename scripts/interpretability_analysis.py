@@ -106,6 +106,7 @@ def parse_args(argv=None):
     p.add_argument("--refs", default="zero,means,boot,neutral")
     p.add_argument("--targets", default="P_total,d_mean,z_top1,alpha_avg,group_logp_0")
     p.add_argument("--figs_dir", default="docs/paper/figs")
+    p.add_argument("--plot-summary", default="", help="只重绘模式：既有 summary.json 路径（跳过采集/分析）")
     return p.parse_args(argv)
 
 
@@ -115,6 +116,9 @@ def _parse_list(s: str):
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.plot_summary:
+        _plot_from_summary(args)
+        return
     t0 = time.time()
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
     Path(args.figs_dir).mkdir(parents=True, exist_ok=True)
@@ -199,6 +203,20 @@ def main(argv=None):
     out_json = Path(args.out_dir) / "summary.json"
     out_json.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nsummary -> {out_json}", flush=True)
+
+
+def _plot_from_summary(args):
+    """只读既有 summary.json 重出图（无需重跑 7.7h 分析）。"""
+    Path(args.figs_dir).mkdir(parents=True, exist_ok=True)
+    path = Path(args.plot_summary)
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    snr_list = [int(s) for s in summary["meta"]["snr_points"]]
+    first_snr = str(snr_list[0])
+    targets = list(summary["kernel_shap"].get(first_snr, {}).keys())
+    refs = list(summary["kernel_shap"].get(first_snr, {}).get(targets[0], {}).keys()) if targets else []
+    print(f"# 依据 {path} 重绘（SNR={snr_list} refs={refs}）", flush=True)
+    _make_figures(args, summary, snr_list, refs, targets)
+    print(f"figures -> {args.figs_dir}", flush=True)
 
 
 # ---------------------------------------------------------------- 采集 -------
@@ -511,29 +529,42 @@ def _fig_svea_intervals(args, svea, snr_list):
 
 
 def _fig_overlap(args, summary, snr_list, refs, targets):
+    """参照敏感性热图：每目标一子面板（x = 参照对 y = SNR），同色标。"""
     import matplotlib.pyplot as plt
 
     worker_targets_used = [t for t in targets if not _is_meta_target(t)]
-    cols = [f"{t}@{s}" for t in worker_targets_used for s in snr_list]
-    pairs = [f"{r1}_vs_{r2}" for i, r1 in enumerate(refs) for r2 in refs[i + 1 :]]
-    M = np.full((len(pairs), len(cols)), np.nan)
-    for i, pr in enumerate(pairs):
-        for j, (t, s) in enumerate((t, s) for t in worker_targets_used for s in snr_list):
-            v = summary["validation"].get(str(s), {}).get(t, {}).get("jaccard_refs", {})
-            M[i, j] = v.get(pr, np.nan)
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    im = ax.imshow(M, cmap="RdYlBu_r", vmin=0, vmax=1, aspect="auto")
-    ax.set_yticks(range(len(pairs)), labels=pairs, fontsize=7)
-    ax.set_xticks(range(len(cols)), labels=cols, rotation=90, fontsize=6)
-    fig.colorbar(im, ax=ax, label="Jaccard@5")
+    pairs = [f"{r1}-{r2}" for i, r1 in enumerate(refs) for r2 in refs[i + 1 :]]
+    n_t = len(worker_targets_used)
+    ncols = min(n_t, 3)
+    nrows = int(np.ceil(n_t / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7.2, 1.6 * nrows + 1.4), squeeze=False)
+    vmin, vmax = 0.0, 1.0
+    for ax, t in zip([a for row in axes for a in row], worker_targets_used):
+        M = np.full((len(snr_list), len(pairs)), np.nan)
+        for i, s in enumerate(snr_list):
+            for j, pr in enumerate(pairs):
+                v = summary["validation"].get(str(s), {}).get(t, {}).get("jaccard_refs", {})
+                M[i, j] = v.get(f"{pr.split('-')[0]}_vs_{pr.split('-')[1]}", np.nan)
+        im = ax.imshow(M, cmap="RdYlBu_r", vmin=vmin, vmax=vmax, aspect="auto")
+        ax.set_yticks(range(len(snr_list)), labels=[f"{s} dB" for s in snr_list], fontsize=7)
+        ax.set_xticks(range(len(pairs)), labels=pairs, rotation=90, fontsize=6)
+        ax.set_title(t, fontsize=9)
+        ax.grid(False)
+    for ax in [a for row in axes for a in row][len(worker_targets_used) :]:
+        ax.axis("off")
+    fig.colorbar(im, ax=axes, label="Jaccard@5", fraction=0.025, pad=0.02)
     fig.tight_layout()
     fig.savefig(Path(args.figs_dir) / "fig_topk_overlap.png", dpi=200)
     plt.close(fig)
 
 
 def _fig_attributions(args, summary, snr_list):
+    """EG(KernelSHAP 既定口径参照) 归因条形图：target × {0,30}dB，top-8 块。"""
     import matplotlib.pyplot as plt
 
+    ref = "boot" if "boot" in list(
+        summary["kernel_shap"].get(str(snr_list[0]), {}).get("P_total", {}).keys()
+    ) else "means"
     snrs = [s for s in snr_list if s in (0, 30)] or snr_list[:2]
     targets_used = [
         t
@@ -547,13 +578,14 @@ def _fig_attributions(args, summary, snr_list):
     names = SHAP_PLAYER_NAMES
     for r, target in enumerate(targets_used):
         for c, snr in enumerate(snrs):
-            ker = np.array(summary["kernel_shap"][str(snr)][target]["means"])
-            eg = np.array(summary["eg"][str(snr)][target]["means"])
+            ker = np.array(summary["kernel_shap"][str(snr)][target][ref])
+            eg = np.array(summary["eg"][str(snr)][target][ref])
             idx = np.argsort(np.abs(ker))[-8:]
             ax = axes[r][c]
             x = np.arange(8)
             ax.bar(x - 0.2, ker[idx], 0.4, color="#1f77b4", label="KernelSHAP")
             ax.bar(x + 0.2, eg[idx], 0.4, color="#d62728", label="EG")
+            ax.axhline(0.0, color="k", lw=0.5)
             ax.set_xticks(x)
             ax.set_xticklabels([names[i].replace("_", " ") for i in idx], rotation=60, fontsize=5)
             ax.set_title(f"{target} @ {snr}dB", fontsize=9)

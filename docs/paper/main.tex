@@ -159,7 +159,12 @@ checkpoints preserves and extends the distilled behavior. (v) An honest empirica
 account: full-grid comparison against SDMA/NOMA/equal-power; seed replication
 quantifying intrinsic dispersion ($\sigma_{\rm seed}\approx 0.005$); and a
 pre-registered fine-tuning campaign showing five mechanism variants fall within
-that dispersion.
+that dispersion. (vi) A Shapley-value-based interpretability analysis
+(\S\ref{sec:interp}): global feature-subset selection via the SVEA
+classification game and expected-gradient attributions validated against a
+model-agnostic proxy under multiple references, showing that the learned power
+decision is driven by queue backlog and channel gain while the drain, decoding
+order and meta-grouping heads collapse to near-constant defaults.
 
 \section{System Model and Problem Formulation}
 \label{sec:system}
@@ -186,15 +191,15 @@ with SINR denominator collecting (i) interference from not-yet-decoded streams,
 (ii) SIC residual from decoded streams scaled by hardware imperfection
 $\beta^2$, and (iii) CSI-error residual scaled by $\varepsilon^2 p$, plus thermal
 noise $\sigma^2$:
-\begin{multline}
-\mathrm{SINR}_{k}^{(j)} = p_k\,|\vect{w}^{\mathsf H}\hat{\vect{h}}_k|^2
-\;/\;\Big(
-\sum_{i\notin\mathcal{D}_j} p_i |\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2
-+ \beta^2 \sum_{i\in\mathcal{D}_j} p_i |\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2\\
-+\ \varepsilon^2 \textstyle\sum_i p_i \|\vect{w}\|^2
-+ \sigma^2 \|\vect{w}\|^2 \Big),
+\begin{equation}
+\begin{split}
+\mathrm{SINR}_{k}^{(j)} &= \frac{p_k\,|\vect{w}^{\mathsf H}\hat{\vect{h}}_k|^2}
+{I_{\rm undec} + \beta^2 I_{\rm dec} + \varepsilon^2 P_{\rm tot}\|\vect{w}\|^2 + \sigma^2\|\vect{w}\|^2},\\
+I_{\rm undec} &= \!\!\sum_{i\notin\mathcal{D}_j}\! p_i\,|\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2,\qquad
+I_{\rm dec} = \!\!\sum_{i\in\mathcal{D}_j}\! p_i\,|\vect{w}^{\mathsf H}\hat{\vect{h}}_i|^2,
+\end{split}
 \label{eq:sinr}
-\end{multline}
+\end{equation}
 where $\mathcal{D}_j$ is the set decoded before position $j$. The MMSE combiner is
 regularized by the worst-case bound via $\varepsilon^2 P_{\rm tot}\vect{I}$
 (robust MMSE). Evaluating \eqref{eq:sinr} at the common- and private-stream
@@ -264,16 +269,20 @@ $P\to0$ optimum.
 Let $\mathcal{S}=\{s_1,\dots,s_7\}$ be the evaluation SNR grid (0--30\,dB). The
 constraint set, relative to a reference SDMA policy, is
 \begin{equation}
-\mathrm{deliv}_\pi(s) \ge \mathrm{deliv}_{\rm SDMA}(s),\quad
-\mathrm{queue}_\pi(s) \le 1.1\,\mathrm{queue}_{\rm SDMA}(s),
+\begin{split}
+&\mathrm{deliv}_\pi(s) \ge \mathrm{deliv}_{\rm SDMA}(s),\\
+&\mathrm{queue}_\pi(s) \le 1.1\,\mathrm{queue}_{\rm SDMA}(s),
+\end{split}
 \label{eq:gates}
 \end{equation}
-for all $s\in\mathcal{S}$ (a \emph{relative two-bar gate} at each point).
-a \emph{relative two-bar gate} at each point. The reported score is the
-lexicographic tuple
-$[\#\{s:\text{gate met}\},\ \overline{\mathrm{deliv}},\ -\overline{\mathrm{queue}},\
-\mathrm{EE\ ratio}]$, so cleared points dominate, then mean delivery, queue, EE
-ratio. A global aggregate check gates termination but does not substitute
+for all $s\in\mathcal{S}$ (a \emph{relative two-bar gate} at each point). The
+reported score is the lexicographic tuple
+\begin{equation}
+\mathrm{score} = \big[\ \#\{s:\text{gate met}\},\ \overline{\mathrm{deliv}},\ -\overline{\mathrm{queue}},\ \mathrm{EE\ ratio}\ \big],
+\label{eq:score}
+\end{equation}
+so cleared points dominate first, then mean delivery, queue, and EE ratio. A
+global aggregate check gates termination but does not substitute
 \eqref{eq:gates}. Collecting the per-slot decisions into
 $\vect{x}[t]=(\vect{g},\vect{\alpha},\vect{p},\vect{d},\pi)[t]$, the design
 problem is the constrained stochastic control problem
@@ -313,11 +322,13 @@ the policy gradient; at deployment the order is deterministic,
 $\pi=\arg\mathrm{sort}(-\vect{z})$. Power logits are mapped to shares by a
 clipped softmax over users, so the $4K$ action stays in a bounded domain.
 Observations are per-user feature blocks plus globals; the worker observation is
-$11K{+}3$ dimensional (per-user channel gain, queue, arrival, power/rate
-history, interference and QoS-class fields, plus global SNR, CSI-error and time
-scalars), and a history window of the
-last $H$ slots augments each user token. Lagrangian multipliers, delivery-debt
-backlog and Dinkelbach ratio are injected by equal-dimension state augmentation.
+$13K{+}3$ dimensional --- per-user channel gain, queue, queue change, arrivals,
+power and rate history, and, via equal-dimension state augmentation of the
+interference/fairness/distance blocks, the Lagrangian-bucket, delivery-debt (DVQ)
+and Dinkelbach-ratio blocks, plus split $\alpha$, group id and QoS load/priority
+fields, and global time, SNR and CSI-error scalars --- and a history window of
+the last $H$ slots augments each user token. This is the feature-block space on
+which the interpretability analysis of \S\ref{sec:interp} operates.
 
 \subsection{Hierarchical policy architecture}
 The meta-controller embeds per-user meta-features, applies multi-head
@@ -769,19 +780,20 @@ $\approx$40 GPU-h plus the CPU-only official evaluation grid.
 \begin{table}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 \caption{Asymptotic and measured complexity (per slot unless noted).}
 \label{tab:complex}
 \begin{tabular}{l|l|c}
 \toprule
 Operation & Asymptotic cost & Measured \\
 \midrule
-Worker forward (SA-GAT) & $O(K\,d^2 + K^2 + 4Kh)$ & $\approx$19\,ms \\
-Meta decision (every $T_s$) & $O(K\,d_m^2 + K^2)$ & negligible \\
-PPO update & $O(B\,E\,(d^2+K))$ & per rollout \\
-DiffOpt (per slot) & $O(25\,N_r^2 K + N_r K^2)$ & $\approx$0.26\,s \\
-Ours vs DiffOpt saving & --- & $\approx$14$\times$ \\
-Training (8{,}000 ep) & --- & $\approx$8 GPU-h / arm \\
-\textbf{Ours: 5-seed total} & --- & $\approx$40 GPU-h \\
+Worker forward (SA-GAT) & $O(Kd^2{+}K^2{+}4Kh)$ & $\approx$19\,ms \\
+Meta (each $T_s$) & $O(Kd_m^2{+}K^2)$ & negligible \\
+PPO update & $O(BE(d^2{+}K))$ & per rollout \\
+DiffOpt (per slot) & $O(25N_r^2 K{+}N_r K^2)$ & $\approx$0.26\,s \\
+DiffOpt saving & --- & $\approx$14$\times$ \\
+Training (8{,}000 ep) & --- & $\approx$8 GPU-h/arm \\
+\textbf{Five-seed total} & --- & $\approx$40 GPU-h \\
 \bottomrule
 \end{tabular}
 \end{table}

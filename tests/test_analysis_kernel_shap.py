@@ -88,6 +88,34 @@ def test_coalition_masking_roundtrip():
     assert masked[g0 + 2] == pytest.approx(ref[g0 + 2])  # eps 玩家未激活（索引 14）
 
 
+def test_player_slices_history_and_masking():
+    """include_history 时把 12 个滞后块并成 3 个组玩家（18 玩家），掩码正确落在 lag 块。"""
+    from src.analysis.features import mask_player_obs, player_names, player_slices
+
+    layout = ObsLayout(K=3, H=2, history_features=("h_gains", "queue", "power"))
+    assert layout.n_players_for(False) == 15
+    assert layout.n_players_for(True) == 18
+    names = player_names(layout, include_history=True)
+    assert names[13] == "hist_h_gains" and names[14] == "hist_queue" and names[15] == "hist_power"
+    sl = player_slices(layout, include_history=True)
+    # hist_queue 组（第 14 号玩家）= lag0 的 queue 块(13+0*3+1=14) ∪ lag1 的 queue 块(13+1*3+1=17)
+    q_idx = sl[14][1]
+    assert set(q_idx.tolist()) == set(range(14 * 3, 15 * 3)).union(range(17 * 3, 18 * 3))
+    obs = np.arange(layout.obs_dim(), dtype=np.float64)
+    ref = np.full(layout.obs_dim(), 9.0)
+    active = np.zeros(18, dtype=bool)
+    active[14] = True
+    masked = mask_player_obs(obs, layout, active, ref, include_history=True)
+    np.testing.assert_allclose(masked[q_idx], obs[q_idx])   # hist_queue 组激活
+    assert masked[0] == pytest.approx(9.0)                  # 原生块 0 未激活取参照
+    # 默认模式（15 玩家）行为不变
+    active15 = np.zeros(15, dtype=bool)
+    active15[13] = True
+    masked15 = mask_player_obs(obs, layout, active15, ref)
+    g0 = layout.globals_offset
+    assert masked15[g0 + 1] == pytest.approx(obs[g0 + 1])   # snr 玩家激活
+
+
 def test_kernel_shap_blocks_wiring():
     """15 玩家接线：形状、全集/空集端点值、效率性 sanity。"""
     layout = ObsLayout(K=4, H=0)

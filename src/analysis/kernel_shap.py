@@ -128,8 +128,9 @@ def kernel_shap_blocks(
     bg_k: int = 32,
     seed: int = 0,
     batch: int = 4096,
+    include_history: bool = False,
 ):
-    """obs 15 块玩家（13 原生 + snr + eps）的 KernelSHAP。
+    """obs 15/18 块玩家（13 原生 + [3 历史组] + snr + eps）的 KernelSHAP。
 
     ref_obs 为 (obs_dim,) 单参照 → bg_k 份同一背景；为 (n_bg, obs_dim)
     多行 → 取前 bg_k 行作为经验背景分布（R_boot）。
@@ -143,9 +144,11 @@ def kernel_shap_blocks(
         bg = bg[:bg_k]
 
     def mask_fn(bg_row, active):
-        return mask_player_obs(obs, layout, active, bg_row)
+        return mask_player_obs(obs, layout, active, bg_row, include_history=include_history)
 
-    return kernel_shap(eval_fn, obs, layout.n_players, bg, mask_fn, n_pairs=n_pairs, seed=seed, batch=batch)
+    return kernel_shap(
+        eval_fn, obs, layout.n_players_for(include_history), bg, mask_fn, n_pairs=n_pairs, seed=seed, batch=batch
+    )
 
 
 def kernel_shap_channels(

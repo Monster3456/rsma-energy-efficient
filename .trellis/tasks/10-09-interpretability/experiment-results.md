@@ -85,3 +85,28 @@ PYTHONPATH=.; .venv\Scripts\python.exe scripts/interpretability_analysis.py --ca
    means + boot（如需要，可把 zero 参照的 recall 值作为「敏感性下界」报告）。
 4. **meta 特征空间与 worker 观测空间分离**（12 通道 vs 13+2 块）——归因分别进行，不可混比；
    Meta 的 snr/capacity 通道（7/8）是全局广播，在通道级归因里单位语义不同，报告中注明。
+## P0 取证（2026-10-11）：历史块玩家归因 + queue_growth 标签
+
+工具升级：`--include-history` 把 12 个历史滞后块按特征类型并成 3 个组玩家（hist_h_gains / hist_queue / hist_power，共 18 玩家），EG/KernelSHAP/掩码/图例全部支持（`features.player_slices`），新增单测 `test_player_slices_history_and_masking`。
+
+运行：SNR {0,15,30} × (queue_growth 标签 SVEA + 含历史块的 KernelSHAP/EG，bootstrap 参照，n_pairs=256/bg=16/n_eg=128/n_attributed=48，状态缓存 `logs/interpretability/states.npz` 复用)。
+
+### KernelSHAP P_total（bootstrap）——历史组玩家归因
+
+| SNR | 前三原生 | 历史组玩家（含 rank） | 3 常数块(arrivals/λ_bucket/η) |
+|---|---|---|---|
+| 0  | delta_queue −0.101 / power_history +0.061 / queue −0.046 | hist_queue #3 +0.053、hist_power #5 −0.045、hist_h #7 −0.019 | 全部 #8–10，幅度小 ~4–7× |
+| 15 | queue +0.119 / rate_history +0.084 / power_history +0.081 | hist_power #4 +0.067、hist_queue #7 +0.027、hist_h #8 +0.010 | 幅度小幅，rank ~10 |
+| 30 | queue +0.108 / split_α +0.060 / h_gains −0.035 | **hist_queue #2 −0.063**、hist_power #4 −0.052、hist_h #7 −0.023 | 低 |
+
+**结论：历史窗口不可直接砍。** 三 SNR 点历史块合计归因 0.05–0.14，与头部原生特征同级（30dB 时 hist_queue 排第 2 大功率决策驱动）——"H=4 承载真实时序信息（过载/高 SNR 更明显）"。"观测 603→315（删历史）"的压缩假设被证据否定。可留的次优动作：lag 级归因（当前是 3 组聚合）定位最有效的 lag 数 → H 可缩不可零。
+
+### queue_growth 标签 SVEA
+
+0/15/30dB 全部 **SVEA_neg = ∅**（c̃=1.0 平衡）——"queue 主导"是 **served 标签特有的结论**，跨标签不成立；论文 Limitations 已注明单标签口径，此处增加跨标签证据。
+
+### 与既有结论的合流
+
+- d_mean 归因在含历史块的 18 玩家下依然全部 ≈0（d≡1 恒定）——坍缩结论不受历史块影响。
+- 3 常数块（arrivals/λ_bucket/Dinkelbach-η）仍是**最稳的低信息/剪枝候选**（评估点内零方差 + 全点低归因），但收益只占 obs 72/603 维，属小幅化简。
+- 优化建议排序见对话结论（P0 之后）：常数块剪枝 > Worker α 死维清理 > H 维持现状（不砍）。

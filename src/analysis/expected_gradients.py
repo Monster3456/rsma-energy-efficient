@@ -20,18 +20,7 @@ from collections.abc import Callable
 import numpy as np
 import torch
 
-from src.analysis.features import ObsLayout
-
-
-def _block_slices(layout: ObsLayout) -> list[np.ndarray]:
-    """15 玩家在 (obs_dim,) 上的分量索引（13 原生块各 K 分量 + snr + eps 单分量）。"""
-    idx = []
-    for j in range(layout.n_native):
-        idx.append(np.arange(j * layout.K, (j + 1) * layout.K))
-    g0 = layout.globals_offset
-    idx.append(np.array([g0 + 1]))  # snr_norm
-    idx.append(np.array([g0 + 2]))  # eps_norm
-    return idx
+from src.analysis.features import ObsLayout, player_slices
 
 
 def eg_blocks(
@@ -41,8 +30,9 @@ def eg_blocks(
     ref_obs: np.ndarray,
     n_eg: int = 256,
     seed: int = 0,
+    include_history: bool = False,
 ) -> np.ndarray:
-    """对 obs 算 15 块的 Expected-Gradients 归因（块 = Σ 分量）。
+    """对 obs 算 15/18 块的 Expected-Gradients 归因（块 = Σ 分量）。
 
     Args:
         fn: 可微目标 fn(tensor (B, obs_dim)) -> tensor (B,)（输入 requires_grad）。
@@ -51,9 +41,10 @@ def eg_blocks(
         ref_obs: (obs_dim,) 单点参照，或 (n_bg, obs_dim) 背景分布。
         n_eg: MC 采样数（α 路径 × 背景抽取）。
         seed: 确定性随机源。
+        include_history: True 时把历史滞后块按特征类型并成 3 个组玩家（共 18 块）。
 
     Returns:
-        (15,) 归因向量（与 SHAP_PLAYER_NAMES 对齐）。
+        (n_players,) 归因向量（与 player_names(layout, include_history) 对齐）。
     """
     x = torch.from_numpy(np.asarray(obs, dtype=np.float64)).float()
     ref = np.asarray(ref_obs, dtype=np.float64)
@@ -74,7 +65,8 @@ def eg_blocks(
         acc += (x - xp) * grad.detach()
 
     comp = acc.numpy() / n_eg
-    out = np.array([comp[sl].sum() for sl in _block_slices(layout)], dtype=np.float64)
+    slices = [inds for _, inds in player_slices(layout, include_history)]
+    out = np.array([comp[sl].sum() for sl in slices], dtype=np.float64)
     return out
 
 

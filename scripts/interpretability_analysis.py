@@ -46,6 +46,7 @@ from src.analysis.features import (
     build_neutral_obs,
     global_tail,
     native_blocks,
+    player_names,
     ref_bootstrap,
     ref_means,
     ref_zero,
@@ -107,6 +108,8 @@ def parse_args(argv=None):
     p.add_argument("--targets", default="P_total,d_mean,z_top1,alpha_avg,group_logp_0")
     p.add_argument("--figs_dir", default="docs/paper/figs")
     p.add_argument("--plot-summary", default="", help="只重绘模式：既有 summary.json 路径（跳过采集/分析）")
+    p.add_argument("--include-history", action="store_true",
+                   help="把 12 个历史滞后块按特征类型并成 3 个组玩家（共 18 玩家；取证 H 窗口冗余性）")
     return p.parse_args(argv)
 
 
@@ -156,6 +159,7 @@ def main(argv=None):
             "obs_dim": layout.obs_dim(),
             "temporal": {"H": layout.H, "features": list(layout.history_features)},
             "seed": args.seed,
+            "players": player_names(layout, args.include_history),
         },
         "svea": {},
         "kernel_shap": {},
@@ -459,15 +463,18 @@ def _run_local_attribution(args, dataset, layout, snr_list, refs, targets, kind,
 
 def _attr_worker(args, worker, target, obs_sel, ref, layout, kind, snr):
     fn = worker_targets(worker, target)
-    acc = np.zeros(layout.n_players)
+    n_pl = layout.n_players_for(args.include_history)
+    acc = np.zeros(n_pl)
     for i in range(obs_sel.shape[0]):
         seed = args.seed + snr + i
         if kind == "kernel":
             phi, _, _ = kernel_shap_blocks(
-                fn, obs_sel[i], layout, ref, n_pairs=args.n_pairs, bg_k=args.bg_kernel, seed=seed
+                fn, obs_sel[i], layout, ref, n_pairs=args.n_pairs, bg_k=args.bg_kernel,
+                seed=seed, include_history=args.include_history,
             )
         else:
-            phi = eg_blocks(fn, obs_sel[i], layout, ref, n_eg=args.n_eg, seed=seed)
+            phi = eg_blocks(fn, obs_sel[i], layout, ref, n_eg=args.n_eg, seed=seed,
+                            include_history=args.include_history)
         acc += phi
     return acc / obs_sel.shape[0]
 
@@ -575,7 +582,7 @@ def _fig_attributions(args, summary, snr_list):
         return
     nrows, ncols = len(targets_used), len(snrs)
     fig, axes = plt.subplots(nrows, ncols, figsize=(7.2, 4.6), squeeze=False)
-    names = SHAP_PLAYER_NAMES
+    names = summary.get("meta", {}).get("players") or list(SHAP_PLAYER_NAMES)
     for r, target in enumerate(targets_used):
         for c, snr in enumerate(snrs):
             ker = np.array(summary["kernel_shap"][str(snr)][target][ref])

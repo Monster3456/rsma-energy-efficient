@@ -39,8 +39,12 @@ GLOBAL_FEATURE_NAMES: tuple[str, ...] = ("time_ratio", "snr_norm", "eps_norm")
 #: 局部归因（KernelSHAP / EG）的 15 个玩家：13 原生块 + snr_norm + eps_norm。
 SHAP_PLAYER_NAMES: tuple[str, ...] = NATIVE_FEATURE_NAMES + ("global_snr", "global_eps")
 
+#: 历史滞后块按特征类型归并的玩家名（include_history=True 时追加，各含 H 个 lag 块）
+HISTORY_GROUP_NAMES: tuple[str, ...] = ("hist_h_gains", "hist_queue", "hist_power")
+
 _N_NATIVE = len(NATIVE_FEATURE_NAMES)  # 13
 _N_SHAP_PLAYERS = len(SHAP_PLAYER_NAMES)  # 15
+_N_PLAYERS_HIST = _N_SHAP_PLAYERS + len(HISTORY_GROUP_NAMES)  # 18
 _SNR_PLAYER_IDX = _N_NATIVE  # 13 -> global tail idx 1
 _EPS_PLAYER_IDX = _N_NATIVE + 1  # 14 -> global tail idx 2
 
@@ -79,8 +83,39 @@ class ObsLayout:
         """局部归因玩家数 = 13 原生 + snr + eps。"""
         return _N_SHAP_PLAYERS
 
+    def n_players_for(self, include_history: bool = False) -> int:
+        """玩家数：include_history=True 时再并入 3 个历史组玩家（共 18）。"""
+        return _N_PLAYERS_HIST if include_history else self.n_players
+
     def obs_dim(self) -> int:
         return self.globals_offset + self.n_global
+
+
+def player_slices(layout: ObsLayout, include_history: bool = False) -> list[tuple[str, np.ndarray]]:
+    """15/18 玩家在 (obs_dim,) 上的分量索引 [(name, indices), ...]。
+
+    与 SHAP_PLAYER_NAMES（+HISTORY_GROUP_NAMES）对齐：per-user 玩家各含 K 个
+    分量，历史组玩家含其 H 个 lag 块的全部 K·H 分量，snr/eps 单分量。
+    """
+    K = layout.K
+    out = [(NATIVE_FEATURE_NAMES[j], np.arange(j * K, (j + 1) * K)) for j in range(layout.n_native)]
+    if include_history:
+        F = len(layout.history_features)
+        for f, feat_name in enumerate(layout.history_features):
+            inds = []
+            for lag in range(layout.H):
+                base = (layout.n_native + lag * F + f) * K
+                inds.extend(range(base, base + K))
+            out.append((f"hist_{feat_name}", np.array(inds, dtype=np.int64)))
+    g0 = layout.globals_offset
+    out.append(("global_snr", np.array([g0 + 1])))
+    out.append(("global_eps", np.array([g0 + 2])))
+    return out
+
+
+def player_names(layout: ObsLayout, include_history: bool = False) -> list[str]:
+    """玩家名列表（与 player_slices / 归因向量对齐）。"""
+    return [name for name, _ in player_slices(layout, include_history)]
 
 
 def resolve_layout(config) -> ObsLayout:
@@ -139,31 +174,35 @@ def native_feature_vector(obs: np.ndarray, layout: ObsLayout, user_idx: int) -> 
     return native_blocks(obs, layout)[user_idx]
 
 
-def mask_player_obs(obs: np.ndarray, layout: ObsLayout, active: np.ndarray, ref_obs: np.ndarray) -> np.ndarray:
+def mask_player_obs(
+    obs: np.ndarray,
+    layout: ObsLayout,
+    active: np.ndarray,
+    ref_obs: np.ndarray,
+    include_history: bool = False,
+) -> np.ndarray:
     """按玩家联盟掩码构造掩码观测（KernelSHAP 联盟求值）。
 
     Args:
         obs: 待解释状态 (obs_dim,)。
-        active: (n_players=15,) 布尔；True=该玩家取 obs 值，False=取参照值。
-        ref_obs: 参照状态 (obs_dim,)；非玩家块（历史滞后、time_ratio）恒取参照值，
+        active: (n_players,) 布尔（15 或 18，取决于 include_history）；True=该玩家
+            取值自 obs，False=取参照值。
+        ref_obs: 参照状态 (obs_dim,)；非玩家块（time_ratio 等）恒取参照值，
             即非玩家特征按参照边际化（标准 fill-in 约定）。
+        include_history: True 时把 12 个历史滞后块按特征类型并成 3 个组玩家。
 
     Returns:
         (obs_dim,) 掩码后的状态。
     """
     active = np.asarray(active, dtype=bool)
-    assert active.shape == (layout.n_players,), f"active 形状 {active.shape} != (15,)"
+    n_expected = layout.n_players_for(include_history)
+    assert active.shape == (n_expected,), f"active 形状 {active.shape} != ({n_expected},)"
     o = np.array(obs, dtype=np.float64)
     r = np.array(ref_obs, dtype=np.float64)
     masked = r.copy()
-    for j in range(layout.n_native):
-        if active[j]:
-            masked[j * layout.K : (j + 1) * layout.K] = o[j * layout.K : (j + 1) * layout.K]
-    g0 = layout.globals_offset
-    if active[_SNR_PLAYER_IDX]:
-        masked[g0 + 1] = o[g0 + 1]
-    if active[_EPS_PLAYER_IDX]:
-        masked[g0 + 2] = o[g0 + 2]
+    for i, (_, inds) in enumerate(player_slices(layout, include_history)):
+        if active[i]:
+            masked[inds] = o[inds]
     return masked
 
 

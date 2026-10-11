@@ -35,7 +35,17 @@ def worker_targets(model, name: str, k: int | None = None) -> Callable[[Tensor],
 
     Returns:
         fn(obs (B, obs_dim) tensor) -> (B,) 标量（可带 requires_grad 求梯度）。
+
+    Raises:
+        ValueError: 请求 α 目标时——Worker 的 α 输出在 group_level_alpha=True 下是
+            死维（被 Meta split_mask 覆盖，见 env._parse_action），正确的 α 解释
+            目标是 meta_targets。
     """
+    if name.startswith("alpha"):
+        raise ValueError(
+            "Worker 的 α 输出是死维（group_level_alpha=True 下被 Meta split_mask 覆盖）；"
+            "请用 meta_targets 解释 α 决策。"
+        )
     if name == "P_total":
 
         def fn(obs):

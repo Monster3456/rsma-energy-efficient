@@ -46,7 +46,8 @@ DEFAULT_FEATURES = "h_gains,queue,power"
 
 
 def make_temporal_config_cls(window: int, features: tuple, power_free: bool = False,
-                             n_r: int | None = None, fixed_lambda: float | None = None):
+                             n_r: int | None = None, fixed_lambda: float | None = None,
+                             prune_constants: bool = False):
     """构造打补丁的 Config 子类。
 
     子配置（SystemConfig/PPOConfig 等）是 dataclass，实例化后在实例上
@@ -64,19 +65,25 @@ def make_temporal_config_cls(window: int, features: tuple, power_free: bool = Fa
             不随信道容量自缩放）。物理层/参数改进在此口径下才会在
             delivery/queue 上可见；注意检查点是在自适应 λ 下训练的，
             结果属分布外泛化诊断，须如实披露。
+        prune_constants: 训练用了 --obs-prune-constant-blocks 的检查点须加此
+            flag（A-prune：评估环境同步移除观测中的 3 个常数原生块，
+            worker_d_user 相应 -3）。
 
     Returns:
         (TemporalConfig, worker_d_user_eff): 子类与扩展后的 per-user 特征维
-        （= 原始 worker_d_user + window * len(features)，不硬编码基值 13）。
+        （= 原始 worker_d_user + window * len(features) [-3 if prune]，不硬编码基值 13）。
     """
     base_d_user = int(_ORIGINAL_CONFIG().ppo.worker_d_user)
     d_user_eff = base_d_user + int(window) * len(features)
+    if prune_constants:
+        d_user_eff -= 3
 
     class TemporalConfig(_ORIGINAL_CONFIG):
         def __init__(self):
             super().__init__()
             self.system.obs_history_window = int(window)
             self.system.obs_history_features = tuple(features)
+            self.system.obs_prune_constant_blocks = bool(prune_constants)
             self.ppo.worker_d_user = int(d_user_eff)
             if power_free:
                 self.system.use_softmax_power_share = False
@@ -206,6 +213,11 @@ def main():
             "自适应 λ 下训练的检查点在此口径属分布外泛化诊断"
         ),
     )
+    parser.add_argument(
+        "--obs-prune-constant-blocks",
+        action="store_true",
+        help="训练用了 --obs_prune_constant_blocks 的检查点须加此 flag（A-prune：评估环境同步移除观测常数块，worker_d_user 相应 -3）",
+    )
     wrapper_args, forwarded = parser.parse_known_args()
 
     if wrapper_args.obs_history_window < 1:
@@ -224,6 +236,7 @@ def main():
         power_free=wrapper_args.no_softmax_power_share,
         n_r=wrapper_args.n_r,
         fixed_lambda=wrapper_args.fixed_lambda,
+        prune_constants=wrapper_args.obs_prune_constant_blocks,
     )
     base_d_user = d_user_eff - wrapper_args.obs_history_window * len(features)
     print(

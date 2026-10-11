@@ -62,12 +62,26 @@ H1：移除后交付/门退化（点数掉 或 delivery 掉出带）→ 训练�
 
 ## 代码改动清单（交付时逐项核对）
 
-- [ ] `src/config.py`: `SystemConfig.obs_prune_constant_blocks: bool = False`
-- [ ] `rsma_env._get_observation`: 按开关跳过块 3/6/10（保留 snr_norm 全局位）
-- [ ] `tests/test_obs_prune.py`（fast）：布局降维 603→531、块对齐、默认 False 字节等价
-- [ ] `src/analysis/features.py`：裁剪布局下 `resolve_layout`/`player_slices` 自适应
-- [ ] `scripts/evaluate_snr_sweep_temporal.py`/训练 CLI：`--obs-prune-constant-blocks` 透传
+- [x] `src/config.py`: `SystemConfig.obs_prune_constant_blocks: bool = False`（commit 后置）
+- [x] `rsma_env._get_observation`: 按开关跳过块 3/6/10（state_aug=False 时只剪 arrivals）；
+      `__init__` obs_dim 同步 -3K（或 -K）
+- [x] `tests/test_obs_prune.py`（fast，5 用例）：默认关闭、维度降级、块对齐（保留块/历史/全局逐位一致）、state_aug 分支、分析侧布局/玩家切片
+- [x] `src/analysis/features.py`：`ObsLayout.prune_constants` / `resolve_layout` / `native_blocks` / `player_slices` 自适应剪枝空间
+- [x] `scripts/evaluate_snr_sweep_temporal.py` + `scripts/train.py` + `src/training/main.py`（worker_d_user -3）+ `src/analysis/models.py`：`--obs-prune-constant-blocks` 全链透传
 - [ ] 结果回填：本文件"结果"节（用户运行后）
+
+### 运行命令（用户）
+
+```powershell
+# A-ctrl：冠军同配方、原始 603 维 obs（种子 43/44）
+PYTHONPATH=.; .venv\Scripts\python.exe scripts/train.py --exp_name intp_A_ctrl --total_episodes N --device cpu --csi_mode imperfect --seed 43
+# A-prune：同一配方 + 剪枝开关（obs 531 维）
+PYTHONPATH=.; .venv\Scripts\python.exe scripts/train.py --exp_name intp_A_prune --total_episodes N --device cpu --csi_mode imperfect --seed 43 --obs_prune_constant_blocks
+
+# 评估（champion 时序 H=4 口径）
+# A-ctrl:  python scripts/evaluate_snr_sweep_temporal.py --obs_history_window 4 --checkpoint <A_ctrl_ckpt>
+# A-prune: python scripts/evaluate_snr_sweep_temporal.py --obs_history_window 4 --obs-prune-constant-blocks --checkpoint <A_prune_ckpt>
+```
 
 ## 结果（预注册后补）
 

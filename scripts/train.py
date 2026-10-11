@@ -48,6 +48,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64, help='Mini-batch size')
     parser.add_argument('--obs_history_window', type=int, default=None,
                         help='时序历史观测窗口长度 H（覆盖 system.obs_history_window，默认 0=关闭）')
+    parser.add_argument('--obs_prune_constant_blocks', action='store_true',
+                        help='A-prune：移除观测中固定 SNR 点内零方差的 3 个常数原生块（arrivals/λ桶/Dinkelbach-η），per-user 13→10 块（可解释性取证驱动）')
 
     # Task#11 消融实验标志
     parser.add_argument('--disable-split', action='store_true',
@@ -288,6 +290,7 @@ if __name__ == "__main__":
     config.ppo.batch_size = args.batch_size
     if args.obs_history_window is not None:
         config.system.obs_history_window = args.obs_history_window
+    config.system.obs_prune_constant_blocks = args.obs_prune_constant_blocks
 
     # 注入消融标志
     config.ablation.disable_split = args.disable_split

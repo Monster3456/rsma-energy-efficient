@@ -55,6 +55,10 @@ class SystemConfig:
     # 使无状态 Worker 获得跨时隙时序信息；策略/act/buffer/ppo 均零语义改动。
     obs_history_window: int = 0
     obs_history_features: tuple = ("h_gains", "queue", "power")
+    #: A-prune 剪枝开关（可解释性取证驱动，默认关 = 官方口径逐位不变）：
+    #: 从观测中移除固定 SNR 评估点内零方差的 3 个原生块（arrivals / λ桶 / Dinkelbach-η，
+    #: 块 3/6/10；后两者仅在 state_aug 语义下为 λ桶/η）；per-user 13→10 块。
+    obs_prune_constant_blocks: bool = False
 
     # 预编码 / 接收机方案
     # "rzf": 统一 MRT 发射 + MMSE-SIC 接收 (默认, 设计文档 2026-06-05)

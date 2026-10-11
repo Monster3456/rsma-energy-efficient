@@ -43,10 +43,10 @@ SHAP_PLAYER_NAMES: tuple[str, ...] = NATIVE_FEATURE_NAMES + ("global_snr", "glob
 HISTORY_GROUP_NAMES: tuple[str, ...] = ("hist_h_gains", "hist_queue", "hist_power")
 
 _N_NATIVE = len(NATIVE_FEATURE_NAMES)  # 13
-_N_SHAP_PLAYERS = len(SHAP_PLAYER_NAMES)  # 15
-_N_PLAYERS_HIST = _N_SHAP_PLAYERS + len(HISTORY_GROUP_NAMES)  # 18
-_SNR_PLAYER_IDX = _N_NATIVE  # 13 -> global tail idx 1
-_EPS_PLAYER_IDX = _N_NATIVE + 1  # 14 -> global tail idx 2
+
+#: A-prune 剪枝的原生块下标（固定 SNR 评估点内零方差；见 config.obs_prune_constant_blocks）
+PRUNED_NATIVE_IDX: tuple[int, ...] = (3, 6, 10)  # arrivals / λ桶 / Dinkelbach-η
+NATIVE_KEEP_IDX: tuple[int, ...] = tuple(j for j in range(_N_NATIVE) if j not in PRUNED_NATIVE_IDX)  # 10
 
 
 @dataclass(frozen=True)
@@ -62,11 +62,17 @@ class ObsLayout:
     history_features: tuple[str, ...] = ()
     n_native: int = _N_NATIVE
     n_global: int = 3
+    prune_constants: bool = False  # A-prune：移除固定 SNR 点内零方差的原生块
+
+    @property
+    def native_active(self) -> int:
+        """剪枝后的原生块数（13 → 10）。"""
+        return len(NATIVE_KEEP_IDX) if self.prune_constants else self.n_native
 
     @property
     def d_user_eff(self) -> int:
-        """per-user 总块数 = 13 原生 + H·len(history_features) 历史滞后。"""
-        return self.n_native + self.H * len(self.history_features)
+        """per-user 总块数 = 原生(13 或 10) + H·len(history_features) 历史滞后。"""
+        return self.native_active + self.H * len(self.history_features)
 
     @property
     def globals_offset(self) -> int:
@@ -80,31 +86,43 @@ class ObsLayout:
 
     @property
     def n_players(self) -> int:
-        """局部归因玩家数 = 13 原生 + snr + eps。"""
-        return _N_SHAP_PLAYERS
+        """局部归因玩家数 = 原生玩家 + snr + eps（含剪枝影响）。"""
+        return self.native_active + 2
 
     def n_players_for(self, include_history: bool = False) -> int:
-        """玩家数：include_history=True 时再并入 3 个历史组玩家（共 18）。"""
-        return _N_PLAYERS_HIST if include_history else self.n_players
+        """玩家数：include_history=True 时再并入 3 个历史组玩家。"""
+        return self.n_players + (len(HISTORY_GROUP_NAMES) if include_history else 0)
 
     def obs_dim(self) -> int:
         return self.globals_offset + self.n_global
 
 
 def player_slices(layout: ObsLayout, include_history: bool = False) -> list[tuple[str, np.ndarray]]:
-    """15/18 玩家在 (obs_dim,) 上的分量索引 [(name, indices), ...]。
+    """12/15/18 玩家在 (obs_dim,) 上的分量索引 [(name, indices), ...]。
 
     与 SHAP_PLAYER_NAMES（+HISTORY_GROUP_NAMES）对齐：per-user 玩家各含 K 个
-    分量，历史组玩家含其 H 个 lag 块的全部 K·H 分量，snr/eps 单分量。
+    分量（A-prune 时跳过块 3/6/10），历史组玩家含其 H 个 lag 块的全部 K·H
+    分量，snr/eps 单分量。
     """
     K = layout.K
-    out = [(NATIVE_FEATURE_NAMES[j], np.arange(j * K, (j + 1) * K)) for j in range(layout.n_native)]
+    if layout.prune_constants:
+        # 剪枝空间：保留的原生块按 KEEP 顺序占行 0..9（行号 = keep 位置 × K）
+        out = [
+            (NATIVE_FEATURE_NAMES[j], np.arange(r * K, (r + 1) * K))
+            for r, j in enumerate(NATIVE_KEEP_IDX)
+        ]
+    else:
+        out = [
+            (NATIVE_FEATURE_NAMES[j], np.arange(j * K, (j + 1) * K)) for j in range(layout.n_native)
+        ]
     if include_history:
-        F = len(layout.history_features)
+        # 历史 lag 块在剪枝空间的行号 = native_active（10 或 13）之后
         for f, feat_name in enumerate(layout.history_features):
             inds = []
             for lag in range(layout.H):
-                base = (layout.n_native + lag * F + f) * K
+                base = (
+                    layout.native_active + lag * len(layout.history_features) + f
+                ) * K
                 inds.extend(range(base, base + K))
             out.append((f"hist_{feat_name}", np.array(inds, dtype=np.int64)))
     g0 = layout.globals_offset
@@ -126,6 +144,7 @@ def resolve_layout(config) -> ObsLayout:
         K=int(sys_cfg.K),
         H=int(getattr(sys_cfg, "obs_history_window", 0)),
         history_features=hist,
+        prune_constants=bool(getattr(sys_cfg, "obs_prune_constant_blocks", False)),
     )
 
 
@@ -149,16 +168,15 @@ def split_blocks(obs: np.ndarray, layout: ObsLayout) -> np.ndarray:
 
 
 def native_blocks(obs: np.ndarray, layout: ObsLayout) -> np.ndarray:
-    """前 13 个原生 per-user 块 → (N, K, 13) 或 (K, 13)。"""
+    """原生 per-user 块 → (N, K, 13) 或 (K, 13)（A-prune 时只取保留的 10 块）。"""
     arr = np.asarray(obs, dtype=np.float64)
     sq = arr.ndim == 1
     if sq:
         arr = arr[None, :]
     per_user = arr[:, : layout.globals_offset]
-    out = per_user.reshape(arr.shape[0], layout.d_user_eff, layout.K).transpose(0, 2, 1)[
-        :, :, : layout.n_native
-    ]
-    return out[0] if sq else out
+    blocks = per_user.reshape(arr.shape[0], layout.d_user_eff, layout.K).transpose(0, 2, 1)
+    blocks = blocks[:, :, : layout.native_active]  # 原生区在前 native_active 行
+    return blocks[0] if sq else blocks
 
 
 def global_tail(obs: np.ndarray, layout: ObsLayout) -> np.ndarray:

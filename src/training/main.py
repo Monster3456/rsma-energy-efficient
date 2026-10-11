@@ -718,6 +718,13 @@ def train(config=None):
                 f"features={list(hist_feats)}, "
                 f"worker_d_user: {worker_d_user_base} -> {worker_d_user_eff}"
             )
+        if bool(getattr(config.system, "obs_prune_constant_blocks", False)):
+            # A-prune：观测移除 3 个常数原生块 → Worker d_user 相应 -3（与 env 对齐）
+            worker_d_user_eff -= 3
+            print(
+                f"[Train] obs_prune_constant_blocks=True: "
+                f"worker_d_user -> {worker_d_user_eff}"
+            )
         worker_ac = ActorCriticAttn(
             obs_dim=obs_dim,
             action_dim=worker_action_dim,

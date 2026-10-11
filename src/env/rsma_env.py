@@ -188,6 +188,16 @@ class RSMAEnergyEnv(gym.Env):
         if self.obs_history_window > 0:
             self._obs_dim += self.obs_history_window * len(self.obs_history_features) * self.K
 
+        # A-prune（可解释性取证驱动，默认关）：移除固定 SNR 评估点内零方差的
+        # 原生块（块 3 arrivals / 块 6 λ桶 / 块 10 Dinkelbach-η）。块 6/10 仅在
+        # state_aug_enabled 语义下为 λ桶/η；关闭 state_aug 时它们是
+        # interference/distance（有信息），不剪。
+        self.prune_obs_constants: bool = bool(getattr(sys_cfg, 'obs_prune_constant_blocks', False))
+        if self.prune_obs_constants:
+            state_aug = bool(getattr(getattr(self.config, 'lyapunov', None), 'state_aug_enabled', False))
+            n_pruned = 1 if not state_aug else 3
+            self._obs_dim -= n_pruned * self.K
+
         # 分层架构支持
         self.hierarchical_enabled: bool = getattr(
             getattr(self.config, 'hierarchical', None), 'enabled', False
@@ -507,6 +517,12 @@ class RSMAEnergyEnv(gym.Env):
             group_ids_norm,                         # K: 归一化组ID
             distance_norm,                          # K: 距离 / Dinkelbach-eta
         ]
+
+        # A-prune：移除固定 SNR 评估点内零方差的原生块（3 arrivals；state_aug 下
+        # 还有 6 λ桶 / 10 Dinkelbach-η）。只删前 11 个基础块，QoS/历史/全局不动。
+        if self.prune_obs_constants:
+            _drop = {3, 6, 10} if self.state_aug_enabled else {3}
+            obs_blocks = [b for i, b in enumerate(obs_blocks) if i >= 11 or i not in _drop]
 
         # v14 QoS: 启用时追加 2K 维特征
         if self.enable_hetero_qos:

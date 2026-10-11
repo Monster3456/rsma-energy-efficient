@@ -18,20 +18,25 @@ DEFAULT_HISTORY_FEATURES = ("h_gains", "queue", "power")
 def make_temporal_config_cls(
     window: int = DEFAULT_HISTORY_WINDOW,
     features: tuple[str, ...] = DEFAULT_HISTORY_FEATURES,
+    prune_constants: bool = False,
 ):
     """构造打补丁的 Config 子类（实例级 mutate，不改 dataclass 类默认值）。
 
     镜像 ``scripts/evaluate_snr_sweep_temporal.py:48``，供本分析复用。
+    prune_constants=True 时按 A-prune 移除 3 个常数块（worker_d_user 相应 -3）。
     """
     from src.config import Config
 
     d_user_eff = int(Config().ppo.worker_d_user) + window * len(features)
+    if prune_constants:
+        d_user_eff -= 3
 
     class AnalysisConfig(Config):
         def __init__(self):
             super().__init__()
             self.system.obs_history_window = int(window)
             self.system.obs_history_features = tuple(features)
+            self.system.obs_prune_constant_blocks = bool(prune_constants)
             self.ppo.worker_d_user = int(d_user_eff)
 
     return AnalysisConfig

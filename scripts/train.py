@@ -254,6 +254,12 @@ if __name__ == "__main__":
     parser.add_argument('--lr-freeze-update', type=int, default=None,
                         help='M5.4: 达到该 update 数后 lr 钉死在 lr_decay_final_ratio×base'
                              '（显式冻结点；不传=关，沿用涌现式触底）')
+    parser.add_argument('--eval-guard-early-stop', action='store_true',
+                        help='P1 guard-plateau 早停：guard 连续 patience 次评估未刷新 best 且已训够 min_episodes 时提前终止（默认关，可省 35-40% 训练预算）')
+    parser.add_argument('--eval-guard-early-stop-patience', type=int, default=None,
+                        help='早停 patience（连续未刷新次数，默认 2）')
+    parser.add_argument('--eval-guard-early-stop-min-episodes', type=int, default=None,
+                        help='早停最小训练集数（默认 3000）')
     parser.add_argument('--eval-guard', action='store_true',
                         help='M5-F5: 训练中评估守卫（{0,5,30}dB mini-eval + 劣化回滚/lr减半）')
     parser.add_argument('--eval-guard-every', type=int, default=None,
@@ -496,6 +502,12 @@ if __name__ == "__main__":
         config.ppo.eval_guard_margin = args.eval_guard_margin
     if args.eval_guard_max_halvings is not None:
         config.ppo.eval_guard_max_halvings = args.eval_guard_max_halvings
+    # P1 早停
+    config.ppo.eval_guard_early_stop = args.eval_guard_early_stop
+    if args.eval_guard_early_stop_patience is not None:
+        config.ppo.eval_guard_early_stop_patience = args.eval_guard_early_stop_patience
+    if args.eval_guard_early_stop_min_episodes is not None:
+        config.ppo.eval_guard_early_stop_min_episodes = args.eval_guard_early_stop_min_episodes
     # M5.2
     if args.kl_bc_coef is not None:
         config.ppo.kl_bc_coef = args.kl_bc_coef

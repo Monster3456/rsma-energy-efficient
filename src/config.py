@@ -553,6 +553,13 @@ class PPOConfig:
     eval_guard_margin: float = 0.02   # avg_deliv(守卫点) 低于 bc_init 参考此裕量即判劣化
     eval_guard_max_halvings: int = 3  # 最多回滚+lr 减半次数，超过后冻结 actor（只训 critic/Meta）
     eval_guard_lr_floor: float = 1e-5 # actor lr 减半的下限
+    # P1 guard-plateau 早停（2026-10-12 取证驱动，默认关=零影响）：
+    # guard 评估连续 patience 次无新 best 且已训够 min_episodes → 提前终止训练。
+    # 证据：A-ctrl guard 在 ep≈4003 达峰 0.9847，此后 2900 集未再被超越——
+    # guard 收敛后再训是纯预算浪费（省 35–40% GPU）。
+    eval_guard_early_stop: bool = False
+    eval_guard_early_stop_patience: int = 2
+    eval_guard_early_stop_min_episodes: int = 3000
 
     # ---- M5.2: 显式信任域 + 守卫判据升级（全默认关 = 官方口径零变化）----
     # 依据 M5.1 终审：Arm A 的增益来自 lr 下限把它冻在 BC 盆地附近（隐式信任域），

@@ -542,6 +542,16 @@ _GUARD_REF = {
 }
 
 
+def guard_plateau_stop(stall_count: int, patience: int, episode_count: int,
+                        min_episodes: int, enabled: bool) -> bool:
+    """guard-plateau 早停判定（P1，纯函数便于单测）。
+
+    同时满足才停：开关开 + 已训够 min_episodes + 连续 patience 次 guard 评估
+    未刷新 best_avg_deliv。
+    """
+    return bool(enabled) and int(episode_count) >= int(min_episodes)         and int(stall_count) >= max(int(patience), 1)
+
+
 def _guard_ref_avg(points) -> tuple:
     """给定守卫点集 → (bc_init delivery 均值, bc_init queue 均值)。"""
     return (
@@ -1607,6 +1617,8 @@ def train(config=None):
     guard_halvings = 0
     guard_last_ep = 0
     guard_best_deliv = -1.0
+    guard_stall_count = 0
+    early_stopped = False
     guard_lr_groups: list = []
     if guard_on:
         guard_env = RSMAEnergyEnv(config)
@@ -2331,8 +2343,16 @@ def train(config=None):
                   f"avg_queue={g_res['avg_queue']:.2f} "
                   f"points_met={g_res['points_met']}/{g_res['n_points']} "
                   f"ok={g_res['ok']} | {pp_str}")
+            es = guard_plateau_stop(
+                stall_count=guard_stall_count,
+                patience=int(getattr(config.ppo, "eval_guard_early_stop_patience", 2)),
+                episode_count=episode_count,
+                min_episodes=int(getattr(config.ppo, "eval_guard_early_stop_min_episodes", 3000)),
+                enabled=bool(getattr(config.ppo, "eval_guard_early_stop", False)),
+            )
             if g_res["avg_deliv"] > guard_best_deliv:
                 guard_best_deliv = g_res["avg_deliv"]
+                guard_stall_count = 0
                 torch.save(
                     {
                         "episode": episode_count,
@@ -2361,6 +2381,16 @@ def train(config=None):
                 guard_halvings = _guard_rollback(
                     worker_ac, meta_ac, worker_trainer, guard_last_good,
                     guard_halvings, guard_lr_groups, config)
+            if g_res["avg_deliv"] <= guard_best_deliv:
+                guard_stall_count += 1
+                if es:
+                    print(
+                        f"[Guard] EARLY-STOP: guard 连续 {guard_stall_count} 次评估未刷新 "
+                        f"best（best={guard_best_deliv:.4f} @ ep≈上次更新）→ 提前终止",
+                        flush=True,
+                    )
+                    early_stopped = True
+                    break
 
     # ------------------------- 最终 checkpoint ------------------------- #
     final_ckpt = os.path.join(checkpoint_dir, "final.pt")
@@ -2369,6 +2399,7 @@ def train(config=None):
         "total_steps": total_steps,
         "update_count": update_count,
         "meta_update_count": meta_update_count,
+        "early_stopped": bool(early_stopped),
         "worker_state_dict": worker_ac.state_dict(),
         "meta_state_dict": meta_ac.state_dict(),
         "worker_optimizer": worker_trainer.optimizer.state_dict(),

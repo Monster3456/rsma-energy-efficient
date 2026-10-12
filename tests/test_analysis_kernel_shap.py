@@ -116,6 +116,21 @@ def test_player_slices_history_and_masking():
     assert masked15[g0 + 1] == pytest.approx(obs[g0 + 1])   # snr 玩家激活
 
 
+def test_player_slices_history_lag_wise():
+    """P3 逐 lag 玩家：H·F 个独立玩家，hist_<feat>_l<lag> 索引对齐各自 lag 块。"""
+    from src.analysis.features import player_names, player_slices
+
+    layout = ObsLayout(K=3, H=2, history_features=("h_gains", "queue", "power"))
+    names = player_names(layout, include_history=True, history_lag_wise=True)
+    assert len(names) == layout.n_players + 6  # 13 原生 + 6 lag + snr/eps
+    assert "hist_queue_l0" in names and "hist_queue_l1" in names
+    sl = dict(player_slices(layout, include_history=True, history_lag_wise=True))
+    # hist_queue_l1 的行 = 原生 13 后：lag1 的 queue 块行号 (13+1*3+1)*3 = 51..54
+    q1 = sl["hist_queue_l1"]
+    assert set(q1.tolist()) == set(range(51, 54))
+    assert layout.n_players_for(include_history=True, history_lag_wise=True) == len(names)
+
+
 def test_kernel_shap_blocks_wiring():
     """15 玩家接线：形状、全集/空集端点值、效率性 sanity。"""
     layout = ObsLayout(K=4, H=0)

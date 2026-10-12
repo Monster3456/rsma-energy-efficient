@@ -31,6 +31,7 @@ def eg_blocks(
     n_eg: int = 256,
     seed: int = 0,
     include_history: bool = False,
+    history_lag_wise: bool = False,
 ) -> np.ndarray:
     """对 obs 算 15/18 块的 Expected-Gradients 归因（块 = Σ 分量）。
 
@@ -65,7 +66,7 @@ def eg_blocks(
         acc += (x - xp) * grad.detach()
 
     comp = acc.numpy() / n_eg
-    slices = [inds for _, inds in player_slices(layout, include_history)]
+    slices = [inds for _, inds in player_slices(layout, include_history, history_lag_wise)]
     out = np.array([comp[sl].sum() for sl in slices], dtype=np.float64)
     return out
 

@@ -89,20 +89,25 @@ class ObsLayout:
         """局部归因玩家数 = 原生玩家 + snr + eps（含剪枝影响）。"""
         return self.native_active + 2
 
-    def n_players_for(self, include_history: bool = False) -> int:
-        """玩家数：include_history=True 时再并入 3 个历史组玩家。"""
-        return self.n_players + (len(HISTORY_GROUP_NAMES) if include_history else 0)
+    def n_players_for(self, include_history: bool = False, history_lag_wise: bool = False) -> int:
+        """玩家数：include_history=True 时并入历史玩家（分组 3 个 或 P3 逐 lag H·F 个）。"""
+        return len(player_slices(self, include_history, history_lag_wise))
 
     def obs_dim(self) -> int:
         return self.globals_offset + self.n_global
 
 
-def player_slices(layout: ObsLayout, include_history: bool = False) -> list[tuple[str, np.ndarray]]:
-    """12/15/18 玩家在 (obs_dim,) 上的分量索引 [(name, indices), ...]。
+def player_slices(
+    layout: ObsLayout,
+    include_history: bool = False,
+    history_lag_wise: bool = False,
+) -> list[tuple[str, np.ndarray]]:
+    """12/15/18/24 玩家在 (obs_dim,) 上的分量索引 [(name, indices), ...]。
 
     与 SHAP_PLAYER_NAMES（+HISTORY_GROUP_NAMES）对齐：per-user 玩家各含 K 个
-    分量（A-prune 时跳过块 3/6/10），历史组玩家含其 H 个 lag 块的全部 K·H
-    分量，snr/eps 单分量。
+    分量（A-prune 时跳过块 3/6/10）；历史块默认按特征类型并成 3 个组玩家
+    （各含全部 H 个 lag 块）；history_lag_wise=True 时拆成 H·F 个单独 lag 玩家
+    （P3：定位历史信息集中在前几个 lag，支撑 H 收缩）；snr/eps 单分量。
     """
     K = layout.K
     if layout.prune_constants:
@@ -117,23 +122,34 @@ def player_slices(layout: ObsLayout, include_history: bool = False) -> list[tupl
         ]
     if include_history:
         # 历史 lag 块在剪枝空间的行号 = native_active（10 或 13）之后
-        for f, feat_name in enumerate(layout.history_features):
-            inds = []
+        F = len(layout.history_features)
+        if history_lag_wise:
+            # P3 逐 lag：玩家 = (lag, feature)，名称 hist_<feat>_l<lag>
             for lag in range(layout.H):
-                base = (
-                    layout.native_active + lag * len(layout.history_features) + f
-                ) * K
-                inds.extend(range(base, base + K))
-            out.append((f"hist_{feat_name}", np.array(inds, dtype=np.int64)))
+                for f, feat_name in enumerate(layout.history_features):
+                    base = (layout.native_active + lag * F + f) * K
+                    out.append(
+                        (f"hist_{feat_name}_l{lag}", np.arange(base, base + K, dtype=np.int64))
+                    )
+        else:
+            # 默认按特征类型分组：一个玩家含该特征的全部 H 个 lag 块
+            for f, feat_name in enumerate(layout.history_features):
+                inds = []
+                for lag in range(layout.H):
+                    base = (layout.native_active + lag * F + f) * K
+                    inds.extend(range(base, base + K))
+                out.append((f"hist_{feat_name}", np.array(inds, dtype=np.int64)))
     g0 = layout.globals_offset
     out.append(("global_snr", np.array([g0 + 1])))
     out.append(("global_eps", np.array([g0 + 2])))
     return out
 
 
-def player_names(layout: ObsLayout, include_history: bool = False) -> list[str]:
+def player_names(
+    layout: ObsLayout, include_history: bool = False, history_lag_wise: bool = False
+) -> list[str]:
     """玩家名列表（与 player_slices / 归因向量对齐）。"""
-    return [name for name, _ in player_slices(layout, include_history)]
+    return [name for name, _ in player_slices(layout, include_history, history_lag_wise)]
 
 
 def resolve_layout(config) -> ObsLayout:
@@ -198,6 +214,7 @@ def mask_player_obs(
     active: np.ndarray,
     ref_obs: np.ndarray,
     include_history: bool = False,
+    history_lag_wise: bool = False,
 ) -> np.ndarray:
     """按玩家联盟掩码构造掩码观测（KernelSHAP 联盟求值）。
 
@@ -213,12 +230,12 @@ def mask_player_obs(
         (obs_dim,) 掩码后的状态。
     """
     active = np.asarray(active, dtype=bool)
-    n_expected = layout.n_players_for(include_history)
+    n_expected = layout.n_players_for(include_history, history_lag_wise)
     assert active.shape == (n_expected,), f"active 形状 {active.shape} != ({n_expected},)"
     o = np.array(obs, dtype=np.float64)
     r = np.array(ref_obs, dtype=np.float64)
     masked = r.copy()
-    for i, (_, inds) in enumerate(player_slices(layout, include_history)):
+    for i, (_, inds) in enumerate(player_slices(layout, include_history, history_lag_wise)):
         if active[i]:
             masked[inds] = o[inds]
     return masked

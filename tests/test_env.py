@@ -30,6 +30,8 @@ def _make_env(T=20, csi_mode="perfect", seed=0) -> RSMAEnergyEnv:
     cfg.system.enable_hetero_qos = False
     cfg.system.use_softmax_power_share = False
     cfg.hierarchical.group_level_alpha = False
+    # 遗留语义：钦住未剪 obs（13 块→11 块口径），新默认 A-prune 已转正
+    cfg.system.obs_prune_constant_blocks = False
     return RSMAEnergyEnv(cfg)
 
 

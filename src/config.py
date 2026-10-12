@@ -55,10 +55,13 @@ class SystemConfig:
     # 使无状态 Worker 获得跨时隙时序信息；策略/act/buffer/ppo 均零语义改动。
     obs_history_window: int = 0
     obs_history_features: tuple = ("h_gains", "queue", "power")
-    #: A-prune 剪枝开关（可解释性取证驱动，默认关 = 官方口径逐位不变）：
+    #: A-prune 剪枝开关（2026-10-12 经 ablation 转正为默认 True：官方评估 7/7、
+    #: mean deliv 0.9526 vs A-ctrl 0.9527，Δ=−0.0001 无处理效应）：
     #: 从观测中移除固定 SNR 评估点内零方差的 3 个原生块（arrivals / λ桶 / Dinkelbach-η，
     #: 块 3/6/10；后两者仅在 state_aug 语义下为 λ桶/η）；per-user 13→10 块。
-    obs_prune_constant_blocks: bool = False
+    #: 论文冠军（best_guard.pt，obs 603）为未剪遗留口径：训练/评估需显式
+    #: obs_prune_constant_blocks=False（temporal wrapper 默认关，见其 flag）。
+    obs_prune_constant_blocks: bool = True
 
     # 预编码 / 接收机方案
     # "rzf": 统一 MRT 发射 + MMSE-SIC 接收 (默认, 设计文档 2026-06-05)

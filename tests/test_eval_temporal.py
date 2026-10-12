@@ -62,6 +62,7 @@ def _build_attention_checkpoint(path, window, features=("h_gains", "queue", "pow
     cfg = Config()
     cfg.system.obs_history_window = window
     cfg.system.obs_history_features = tuple(features)
+    cfg.system.obs_prune_constant_blocks = False  # 本路径构造未剪（legacy 时序）检查点
     env = RSMAEnergyEnv(cfg)
     K = env.K
     d_user = cfg.ppo.worker_d_user + window * len(features)

@@ -328,7 +328,14 @@ interference/fairness/distance blocks, the Lagrangian-bucket, delivery-debt (DVQ
 and Dinkelbach-ratio blocks, plus split $\alpha$, group id and QoS load/priority
 fields, and global time, SNR and CSI-error scalars --- and a history window of
 the last $H$ slots augments each user token. This is the feature-block space on
-which the interpretability analysis of \S\ref{sec:interp} operates.
+which the interpretability analysis of \S\ref{sec:interp} operates. Three of the
+per-user blocks (arrivals, Lagrangian-bucket, Dinkelbach ratio) are
+\emph{deterministic} at any fixed SNR evaluation point --- zero variance there ---
+and a pre-registered ablation (\S\ref{sec:interp}) shows they can be removed from
+the observation with no measurable effect; the pruned observation (10 per-user
+blocks, 531 dims at $H{=}4$) is therefore the new default configuration, while
+all results reported in this paper were obtained under the legacy unpruned
+observation for comparability with the champion checkpoint.
 
 \subsection{Hierarchical policy architecture}
 The meta-controller embeds per-user meta-features, applies multi-head
@@ -854,7 +861,13 @@ The power of classification $PSV(\mathrm{SVEA}_{neg})$ (subset/full-set test
 accuracy) stays $\geq 0.95$, i.e.\ the dominant features nearly reproduce the full
 13-feature service model. The arrivals/$\lambda$-bucket/Dinkelbach-$\eta$ blocks
 are constant within each fixed-SNR evaluation point and are excluded as null
-players (their marginal contribution is identically zero).
+players (their marginal contribution is identically zero). We verified the
+practical consequence: a pre-registered same-budget retrain with those three
+blocks removed from the observation clears all 7 gates at mean delivery 0.9526
+vs.\ 0.9527 for the 603-dim control ($\Delta{=}-0.0001$, one order below
+$\sigma_{\rm seed}{\approx}0.005$) --- removing them is empirically free, and
+the pruned observation (10 per-user blocks) is adopted as the default
+configuration.
 \textbf{Local attribution and reference sensitivity}~\cite{fernando2019deepshap}:
 for fixed states we compute expected-gradient attributions (model-introspective
 backpropagation against a reference) for the four decision objects --- total/per-user
@@ -1004,7 +1017,10 @@ $\varepsilon^2 P_{\rm tot}\vect{I}$. Power: $\eta_{\rm PA}=0.35$,
 $P_{\rm circ}=5.0$\,W, $P_{\rm floor}=3.0$\,W. Reward: $V=5$, $w_{\rm ee}=8$,
 $w_q=2$, $w_{\rm ovf}=20$, $w_y=0.3$, $w_x=1$, scale 0.01. Meta: $T_s=20$, $G=4$,
 $\tau:2.0\to0.5$, $\alpha\in[0.1,0.95]$. Worker: SA-GAT 2$\times$(4-head, h=128),
-history $H=4$. PPO: clip 0.1, rollout 2048, batch 64, 8 epochs, actor lr 3e-5,
+history $H=4$. Observation pruning (A-prune, default on): arrivals /
+Lagrangian-bucket / Dinkelbach-ratio blocks removed (10 per-user blocks,
+531 dims at $H{=}4$; champion evaluated under the legacy unpruned 603-dim
+observation). PPO: clip 0.1, rollout 2048, batch 64, 8 epochs, actor lr 3e-5,
 GAE 0.95. Expert: Adam 25 steps lr 0.1 cold-start, 8{,}000 demos. Guard v2:
 6 points $\times$ 16 episodes + queue bar.
 

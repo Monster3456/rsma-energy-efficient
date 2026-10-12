@@ -70,7 +70,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   11 个 per-user K 维块: h_gains, queue, Δqueue, arrivals, power_history,
     rate_history, interference*, fairness*, split_mask(=per-user α), group_ids_norm, distance_norm*
   3 个 global: time_ratio, snr_norm, eps_norm
-+2K  (enable_hetero_qos=True 默认): qos_lambda_load, qos_priority   → 默认 obs_dim = 13K+3 = 315
++2K  (enable_hetero_qos=True 默认): qos_lambda_load, qos_priority   → obs_dim = 13K+3 = 315
+  **2026-10-12 A-prune 转正：`obs_prune_constant_blocks` 默认 True**——移除固定 SNR 点内
+  零方差的 3 个原生块（arrivals/λ桶/Dinkelbach-η，块 3/6/10）→ 默认 obs_dim = 10K+3 = 243
+  （champion H=4 未剪 603 为论文遗留口径：训练/评估显式 `obs_prune_constant_blocks=False`）
 +H·3K (obs_history_window=H>0): 最近 H 槽的 (h_gains, queue, power) 快照，最旧在前，
      拼在 per-user 区之后、global 尾之前（时序 Worker 实验用 H=4，策略保持无状态）
 +K   (obs_include_csi_quality=True 可选): per-user 估计不确定度
@@ -188,6 +191,7 @@ Meta: 积累 meta_update_threshold=30 段后更新
 | use_dvq / dvq_cvar_alpha | True / 0.25 | per-user DVQ，CVaR worst-25% |
 | obs_history_window / features | 0 / (h_gains,queue,power) | H>0 启用时序历史观测 |
 | state_aug_enabled | True | λ/DVQ/q* 等维替换注入 obs |
+| obs_prune_constant_blocks | **True**（A-prune 转正） | 移除固定 SNR 点内零方差常数块（arrivals/λ桶/Dinkelbach-η），10 原生块；ablation 证明 Δ=−0.0001 无处理效应（7/7 门、0.9526 vs 0.9527） |
 
 ### LyapunovConfig / RewardConfig（要点）
 | 参数 | 默认值 | 说明 |
@@ -266,6 +270,7 @@ python -m src.training.main --exp_name <名> --total_episodes N --device cpu --c
 python scripts/evaluate_snr_sweep.py --n_episodes 50 --checkpoint logs/<exp>/checkpoints/final.pt
 # 时序 (H>0) / 结构变体 checkpoint 必须用 wrapper（否则 obs 维推断错误）：
 python scripts/evaluate_snr_sweep_temporal.py --obs_history_window 4 --checkpoint <ckpt> [--n_r --fixed_lambda --no-softmax-power-share ...]
+# 剪枝(531 obs)检查点评估须加 --obs-prune-constant-blocks；wrapper 默认关=未剪(603, 冠军兼容)
 
 # 自动优化循环（先读 logs/opt_knowledge.json！）
 python scripts/optimize_loop.py --status | --dry-run | --stop | --reset    # 配置: scripts/optimize_loop_config.yaml

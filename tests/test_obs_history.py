@@ -36,6 +36,7 @@ def _legacy_cfg(T=16, seed=0, window=0, features=("h_gains", "queue", "power")) 
     cfg.system.enable_hetero_qos = False
     cfg.system.use_softmax_power_share = False
     cfg.hierarchical.group_level_alpha = False
+    cfg.system.obs_prune_constant_blocks = False  # 遗留口径：钦住未剪 obs
     cfg.system.obs_history_window = window
     cfg.system.obs_history_features = tuple(features)
     return cfg
@@ -76,8 +77,9 @@ class TestDefaultOff:
         cfg = Config()
         assert cfg.system.obs_history_window == 0
         env = RSMAEnergyEnv(cfg)
-        # 默认配置: K=24, 异构 QoS 开 → 11K+3+2K = 13K+3
-        assert env.obs_dim == 11 * env.K + 3 + 2 * env.K
+        # 默认配置（2026-10-12 A-prune 转正）: K=24, 异构 QoS 开, 剪 3 常数块
+        # → (11K+3+2K) − 3K = 10K+3
+        assert env.obs_dim == 10 * env.K + 3
         obs, _ = env.reset(seed=0)
         assert obs.shape == (env.obs_dim,)
 
@@ -104,6 +106,7 @@ class TestObsDim:
     def test_obs_dim_formula_default_config(self):
         cfg = Config()
         cfg.system.obs_history_window = 4
+        cfg.system.obs_prune_constant_blocks = False  # 公式口径（未剪 13 块布局）
         env = RSMAEnergyEnv(cfg)
         F = len(cfg.system.obs_history_features)
         base = 11 * env.K + 3 + 2 * env.K  # 默认异构 QoS 开
@@ -270,6 +273,7 @@ class TestEvalCompat:
         H, F = 4, 3
         cfg = Config()
         cfg.system.obs_history_window = H
+        cfg.system.obs_prune_constant_blocks = False  # 未剪时序检查点往返
         env = RSMAEnergyEnv(cfg)
         K = env.K
         d_user = cfg.ppo.worker_d_user + H * F  # main.py 的扩展 d_user
@@ -316,6 +320,7 @@ class TestAttnWorkerSmoke:
         H = 4
         cfg = Config()
         cfg.system.obs_history_window = H
+        cfg.system.obs_prune_constant_blocks = False  # 未剪时序冒烟：d_user 与 obs 对齐
         env = RSMAEnergyEnv(cfg)
         K = env.K
         d_user = cfg.ppo.worker_d_user + H * len(cfg.system.obs_history_features)

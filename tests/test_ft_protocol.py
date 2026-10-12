@@ -49,6 +49,8 @@ def _mini_config():
     cfg.system.adaptive_lambda = False
     cfg.system.sigma2 = 1.0
     # QoS 保持默认开启：obs=13K+3、worker d_user=13、meta d_user=12 的口径一致性
+    # (A-prune 已转正默认 True；本文件面向训练协议机制，钉回未剪 legacy 口径)
+    cfg.system.obs_prune_constant_blocks = False
     cfg.ppo.use_bucket_experts = False
     cfg.ppo.use_mean_field_critic = False
     cfg.ppo.batch_size = 8

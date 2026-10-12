@@ -34,12 +34,15 @@ def _cfg(prune: bool, K: int = 8, H: int = 0, state_aug: bool = True) -> Config:
     return cfg
 
 
-def test_config_default_off():
-    """默认关闭：官方口径零变化。"""
+def test_config_default_on():
+    """2026-10-12 转正：默认 True（A-prune 为新官方口径，obs 243=10K+3）；显式 False 复原 13K+3。"""
     cfg = Config()
-    assert cfg.system.obs_prune_constant_blocks is False
+    assert cfg.system.obs_prune_constant_blocks is True
     env = RSMAEnergyEnv(cfg)
-    assert env.obs_dim == 13 * 24 + 3  # K=24 默认 → 315
+    assert env.obs_dim == 10 * 24 + 3  # K=24 默认 → 243
+    cfg_legacy = Config()
+    cfg_legacy.system.obs_prune_constant_blocks = False
+    assert RSMAEnergyEnv(cfg_legacy).obs_dim == 13 * 24 + 3  # 冠军遗留口径 315
 
 
 def test_prune_dim_no_history():

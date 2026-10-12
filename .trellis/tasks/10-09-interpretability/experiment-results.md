@@ -110,3 +110,22 @@ PYTHONPATH=.; .venv\Scripts\python.exe scripts/interpretability_analysis.py --ca
 - d_mean 归因在含历史块的 18 玩家下依然全部 ≈0（d≡1 恒定）——坍缩结论不受历史块影响。
 - 3 常数块（arrivals/λ_bucket/Dinkelbach-η）仍是**最稳的低信息/剪枝候选**（评估点内零方差 + 全点低归因），但收益只占 obs 72/603 维，属小幅化简。
 - 优化建议排序见对话结论（P0 之后）：常数块剪枝 > Worker α 死维清理 > H 维持现状（不砍）。
+
+## P3 取证（2026-10-12）：lag 级历史归因 → H 不可收缩（负结果关闭）
+
+工具：`--history-lag-wise` 把 3 个历史组玩家拆成 12 个独立 lag 玩家（H=4 全量 24 玩家），
+EG/KernelSHAP/掩码全链支持 + 单测。运行：SNR {0,15,30} × P_total（bootstrap 参照，
+n_pairs=128/bg=8/n_eg=64/n_attr=32，缓存状态复用）。
+
+| SNR | 原生 top-3 | 历史 lag 玩家 top-3（|·|） |
+|---|---|---|
+| 0 | power_hist 0.058 / Δq 0.032 / arrivals 0.029 | hist_power_l3 0.034、hist_queue_l1 0.033、hist_h_l1 0.032（散布）|
+| 15 | Δq −0.129 / power_hist 0.105 / queue 0.056 | hist_h_l1 0.059、hist_h_l2 0.042、hist_power_l1 0.038（l1 略强但 l2/l3 同级）|
+| 30 | queue 0.415 / λ_bucket −0.129 / dvq 0.091 | **hist_queue_l3 0.302**（最旧 lag 最大！）、hist_h_l2 0.087、hist_queue_l1 −0.064 |
+
+**结论：历史信息跨 4 个 lag 均匀分布（0dB 甚至 old-lag 主导），无"信息集中在前 1–2 lag"
+的证据 → H=4 维持，P3（H 收缩）以负结果关闭。** 与 P0 的"历史不可砍"结论互相印证
+（P0 看整体、P3 看 lag 分布）。
+
+**附带**：P_total 归因里 λ_bucket 在 30dB 升到第 2（−0.129）——注意 λ_bucket 是训练期
+（SNR 域随机化下）的信号，评估点内恒定；不影响 A-prune 决策（其只针对评估点内零方差块）。

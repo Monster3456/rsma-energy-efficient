@@ -56,11 +56,22 @@ $env:PYTHONUNBUFFERED=1; $env:PYTHONIOENCODING='utf-8'; $env:PYTHONPATH='.'
 .venv\Scripts\python.exe scripts\evaluate_snr_sweep_temporal.py --obs_history_window 4 --obs-prune-constant-blocks --checkpoint logs\intp_A_prune_s44_es\checkpoints\best_guard.pt --n_episodes 50
 ```
 
-## 结果（预注册后补）
+## 结果（2026-10-12，E-stop-44：seed 44 / A-prune 配方 / 早停 patience=2, min=3000）
 
 | Arm | stop_ep | 预算节约 | points_met | mean deliv | Δ vs s43 (0.9526) | 裁决 |
 |---|---|---|---|---|---|---|
-| E-stop-44 |  |  |  |  |  | H0 accept/reject |
+| E-stop-44 | **3460**（early_stopped=True） | **50%**（6900→3460） | **6/7** | **0.9320** | **−0.0206** | **H0 拒绝** |
+
+- 早停成功触发（ep 后 2651 的 best_guard 0.9835 连续 2 次 guard 评估未刷新 → ep 3460 停）。
+- 官方评估：**30dB 点门失败**（Deliv 0.805 ✓ 超 SDMA，但 **Q=39.23 > 1.1×34.47=37.9 ✗**）；
+  25dB 亦退化（Q 23.59 vs s43 15.63、deliv 0.884 vs 0.944）。
+- **归因注意（诚实边界）**：E-stop 与 s43 同时变了 seed；无 s44 满预算对照时，
+  30dB 恶化**可能**是 seed-44 本身的高 SNR 弱势、也可能是早停过早冻结（guard 3 点×4ep
+  的 mini-eval 在噪声内未刷新 → 假平台）。按预注册字面门 → **H0 拒绝**；要区分
+  seed 效应 vs 早停效应，需补跑 **A-prune s44 满预算**作为对照（原计划里的 seed-44 复核）。
+- **方案教训**：3 点 mini-eval 的 guard 平台不可作早停依据（官方 30dB 队列门在 mini-eval
+  视野外漂移）；修订版规则须（a）早停前要求平台在**全 7 点**（评估点全集）上成立、
+  或（b）patience 加大 + 冻结后低 lr 继续一小段，作为**新的预注册**再验证。
 
 ## 若 H0 被接受
 

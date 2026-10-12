@@ -194,6 +194,12 @@ if __name__ == "__main__":
                         help='禁用 SNR 桶专家多头 Actor')
     parser.add_argument('--n-bucket-experts', type=int, default=None,
                         help='专家头数量（覆盖 ppo.n_bucket_experts）')
+    parser.add_argument('--fix-drain', action='store_true',
+                        help='P2a：Worker d 块固定 1.0（不学习 drain 头；可解释性取证驱动，默认关）')
+    parser.add_argument('--fix-order', action='store_true',
+                        help='P2b：解码序固定信道增益降序（不学习 PL 头；默认关）')
+    parser.add_argument('--n_groups', type=int, default=None,
+                        help='P2c：覆盖 hierarchical.n_groups（评估 G=1 分组坍缩裁剪；默认 4）')
     parser.add_argument('--lr-bucket-expert', type=float, default=None,
                         help='专家头学习率（覆盖 ppo.lr_bucket_expert）')
 
@@ -326,6 +332,12 @@ if __name__ == "__main__":
     config.resume_episode_count = args.resume_episode_count
     if args.save_interval is not None:
         config.ppo.save_interval = args.save_interval
+    if args.fix_drain:
+        config.ppo.worker_fix_drain = True
+    if args.fix_order:
+        config.ppo.worker_fix_order = True
+    if args.n_groups is not None:
+        config.hierarchical.n_groups = int(args.n_groups)
 
     # Task#33: Partial resume
     config.partial_resume_ckpt = args.partial_resume

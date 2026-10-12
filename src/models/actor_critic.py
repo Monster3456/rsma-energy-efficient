@@ -372,7 +372,9 @@ class ActorCriticAttn(nn.Module):
                  use_c3po_cost_head=False,
                  c3po_n_points=7,
                  backpressure_beta=0.0,
-                 backpressure_mode="queue"):
+                 backpressure_mode="queue",
+                 fix_drain: bool = False,
+                 fix_order: bool = False):
         """
         Args:
             inject_global_to_per_user: 把 global 中后 n_global_inject 维（snr_norm, eps_norm）
@@ -411,6 +413,11 @@ class ActorCriticAttn(nn.Module):
         super().__init__()
         if not use_plackett_luce:
             raise NotImplementedError("ActorCriticAttn 仅支持 PL 模式")
+        # P2 头裁剪实验臂（可解释性取证：d≡1、解码序近特征平坦；默认关=官方口径零变化）：
+        # fix_drain: d 块恒为 1.0（env 口径），d head 的损失贡献清零（不学习）；
+        # fix_order: 解码序恒为信道增益降序（gain-desc），PL z 头损失清零。
+        self.fix_drain = bool(fix_drain)
+        self.fix_order = bool(fix_order)
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.K = K
@@ -804,10 +811,19 @@ class ActorCriticAttn(nn.Module):
             continuous_log_prob = continuous_log_prob - torch.sum(
                 torch.log(1 - action_squashed.pow(2) + 1e-6), dim=-1
             )
+        if self.fix_drain:
+            # P2a：d 块恒为 +1（env 口径 d=(a+1)/2=1.0），行为与"始终全排空"一致
+            action_squashed[..., 2 * self.K : 3 * self.K] = 1.0
 
         # PL 解码序
         z_scores = F.softplus(z_raw) + 1e-6  # (batch, K)
-        if deterministic:
+        if self.fix_order:
+            # P2b：解码序恒为信道增益降序（per_user 通道 0 = h_gains_norm），PL 头不学习
+            decoding_order = torch.argsort(
+                per_user_act[:, :, 0], dim=-1, descending=True
+            )
+            pl_log_prob = torch.zeros(obs.shape[0], device=obs.device)
+        elif deterministic:
             decoding_order = torch.argsort(z_scores, dim=-1, descending=True)
             pl_log_prob = torch.zeros(obs.shape[0], device=obs.device)
         else:
@@ -861,11 +877,20 @@ class ActorCriticAttn(nn.Module):
         dist = Normal(continuous_mean, std)
         actions_clipped = actions.clamp(-0.999, 0.999)
         action_raw = torch.atanh(actions_clipped)
-        continuous_log_prob = dist.log_prob(action_raw).sum(dim=-1)
-        continuous_log_prob = continuous_log_prob - torch.sum(
-            torch.log(1 - actions_clipped.pow(2) + 1e-6), dim=-1
-        )
-        continuous_entropy = dist.entropy().sum(dim=-1)
+        ls = dist.log_prob(action_raw)
+        log1 = torch.log(1 - actions_clipped.pow(2) + 1e-6)
+        if self.fix_drain:
+            # P2a：d 块 log 密度/雅可比贡献清零 → 该头不接收梯度（行为已由 act 固定）
+            ls = ls.clone()
+            log1 = log1.clone()
+            ls[..., 2 * self.K : 3 * self.K] = 0.0
+            log1[..., 2 * self.K : 3 * self.K] = 0.0
+        continuous_log_prob = ls.sum(dim=-1) - log1.sum(dim=-1)
+        ent = dist.entropy()
+        if self.fix_drain:
+            ent = ent.clone()
+            ent[..., 2 * self.K : 3 * self.K] = 0.0
+        continuous_entropy = ent.sum(dim=-1)
 
         # Critic
         per_user_c, global_c = self._split_obs(obs)
@@ -883,7 +908,11 @@ class ActorCriticAttn(nn.Module):
             return continuous_log_prob, value, continuous_entropy, continuous_log_prob
 
         z_scores = F.softplus(z_raw) + 1e-6
-        pl_log_prob = plackett_luce_log_prob(z_scores, decoding_orders)
+        if self.fix_order:
+            # P2b：PL 头不学习（解码序已固定 gain-desc）
+            pl_log_prob = torch.zeros(decoding_orders.shape[0], device=decoding_orders.device)
+        else:
+            pl_log_prob = plackett_luce_log_prob(z_scores, decoding_orders)
         pl_entropy = torch.zeros_like(pl_log_prob)
         total_log_prob = continuous_log_prob + pl_log_prob
         total_entropy = continuous_entropy + pl_entropy

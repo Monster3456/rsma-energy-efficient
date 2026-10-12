@@ -757,6 +757,8 @@ def train(config=None):
             c3po_n_points=getattr(config.constraint, "c3po_n_points", 7) if c3po_enabled else 7,
             backpressure_beta=getattr(config.ppo, "backpressure_beta", 0.0),
             backpressure_mode=getattr(config.ppo, "backpressure_mode", "queue"),
+            fix_drain=getattr(config.ppo, "worker_fix_drain", False),
+            fix_order=getattr(config.ppo, "worker_fix_order", False),
         ).to(device)
         _bp_modes = ['queue', 'queue_channel', 'mw_residual', 'mw_gated']
         if int(worker_ac.backpressure_mode_buf) == 3:

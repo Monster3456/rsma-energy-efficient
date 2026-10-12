@@ -460,6 +460,10 @@ class PPOConfig:
     worker_d_user: int = 13            # per-user 特征维度（v14 QoS: 12→13, 新增 lambda_load + priority）
     worker_attn_hidden: int = 128      # attention token 维度
     worker_attn_heads: int = 4         # MultiHeadAttention 头数
+    # P2 头裁剪实验臂（可解释性取证驱动，默认关=官方口径零变化）：
+    # fix_drain: d 块恒为 1.0 不学习；fix_order: 解码序恒为 gain-desc 不学习。
+    worker_fix_drain: bool = False
+    worker_fix_order: bool = False
     worker_attn_layers: int = 2        # attention 层数
 
     # Mean-Field MAPPO (MVP)

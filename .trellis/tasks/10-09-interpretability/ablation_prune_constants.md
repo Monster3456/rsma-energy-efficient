@@ -83,16 +83,27 @@ PYTHONPATH=.; .venv\Scripts\python.exe scripts/train.py --exp_name intp_A_prune 
 # A-prune: python scripts/evaluate_snr_sweep_temporal.py --obs_history_window 4 --obs-prune-constant-blocks --checkpoint <A_prune_ckpt>
 ```
 
-## 结果（预注册后补）
+## 结果（2026-10-12，两臂各 6900 集 / 674 更新，与冠军同预算；官方 7×50 评估）
 
-| Arm | points_met | mean deliv (seeds) | Δ vs 0.9519 | 裁决 |
-|---|---|---|---|---|
-| A-ctrl (603 维) |  |  |  | 对照 |
-| A-prune (531 维) |  |  |  | H0 accept/reject |
+| Arm | points_met | mean deliv | Δ vs 0.9519 | Δ vs A-ctrl | 裁决 |
+|---|---|---|---|---|---|
+| A-ctrl（603 维，从 M4 bc_init 续）| **7/7** | 0.9527 | +0.0008 | — | 对照（成功率复现冠军配方）|
+| A-prune（531 维，冠军自蒸馏 BC-init 续）| **7/7** | 0.9526 | +0.0007 | **−0.0001** | **H0 接受：剪枝安全** |
 
-## 若 H0 被接受（剪枝安全）的后续
+- 逐点（A-prune，vs SDMA）：0.887/0.989/0.993/0.991/0.974/0.944/0.890，全点 deliv≥SDMA 且 Q≤1.1×SDMA。
+- 两臂均值差 −0.0001 ≪ 种子噪声（σ_seed≈0.005）→ **无处理效应**；obs 603→531（−12%）、
+  worker 输入维 27→22 换来零性能代价。
+- 备注：A-ctrl 的 best_guard 由 guard 在 ep 4003 选中（中间点），官方评估 0.9527 与冠军
+  0.9519 带内一致，说明配方+预算复现成功；A-prune 的 best_guard 在 ep 1228 选中（0.9762 guard 分）。
 
-1. 正式把常数块从官方 obs 移除（默认 False→True），更新论文 System Model/观测描述
-   （13→10 原生块）与可解释性章节的玩家口径。
+## 若 H0 被接受（剪枝安全）的后续 —— 2026-10-12 状态
+
+✅ **H0 接受**（第 2 节结果表）。后续动作待用户决议：
+
+1. **转正提案（推荐）**：把 `SystemConfig.obs_prune_constant_blocks` 默认改为 True，
+   同步论文 System Model/观测描述（13→10 原生块、obs 603→531）与可解释性章节玩家口径；
+   建议在转正前用第二个种子（seed 44）复核一次剪枝臂等价（当前只在 seed 43 上验证）。
+   ⚠️ 默认翻转会改变官方观测口径——须在论文/CLAUDE.md 显著标注，旧 603 检查点评估需
+   显式关 flag（temporal wrapper 已支持两侧）。
 2. 可选：基于 P0 的 H-lag 归因决定 H 是否可缩（H=4→1/2），另行预注册。
 3. Worker α 头删除作为独立工程项，评估检查点迁移后执行。

@@ -78,6 +78,8 @@ if __name__ == "__main__":
     # Resume training
     parser.add_argument('--resume', type=str, default=None,
                         help='从指定 checkpoint 恢复训练 (e.g. logs/full_lagrangian/checkpoints/ckpt_500.pt)')
+    parser.add_argument('--save_interval', type=int, default=None,
+                        help='checkpoint 保存间隔（更新数，覆盖 config.ppo.save_interval；突刺/渐进用）')
     parser.add_argument('--resume-lambda', type=float, default=None,
                         help='恢复训练时手动设置 Lagrangian λ 初值 (来源：训练日志)')
     parser.add_argument('--resume-episode-count', type=int, default=None,
@@ -316,6 +318,8 @@ if __name__ == "__main__":
     config.resume_ckpt = args.resume
     config.resume_lambda = args.resume_lambda
     config.resume_episode_count = args.resume_episode_count
+    if args.save_interval is not None:
+        config.ppo.save_interval = args.save_interval
 
     # Task#33: Partial resume
     config.partial_resume_ckpt = args.partial_resume

@@ -95,6 +95,10 @@ PYTHONPATH=.; .venv\Scripts\python.exe scripts/train.py --exp_name intp_A_prune 
   worker 输入维 27→22 换来零性能代价。
 - 备注：A-ctrl 的 best_guard 由 guard 在 ep 4003 选中（中间点），官方评估 0.9527 与冠军
   0.9519 带内一致，说明配方+预算复现成功；A-prune 的 best_guard 在 ep 1228 选中（0.9762 guard 分）。
+- **2026-10-13 seed-44 复核（PASS）**：A-prune s44 满预算官方评估 **7/7、mean deliv 0.9527**
+  （vs s43 0.9526，Δ=0.0001）→ 剪枝转正**跨种子成立**（30dB: 0.890/Q 28.26 ✓）。
+  该臂同时作为早停对照（见 ablation_early_stop.md），证明 E-stop-44 的 30dB 失门系早停所致、
+  与 seed 无关。
 
 ## 若 H0 被接受（剪枝安全）的后续 —— 2026-10-12 状态
 

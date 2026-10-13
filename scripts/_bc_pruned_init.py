@@ -77,6 +77,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--episodes", type=int, default=200, help="冠军 rollout 的 episode 数")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--n_groups", type=int, default=4,
+                   help="P2c：meta 分组数（默认 4=冠军；G≠4 时用随机初始化 meta，不继承冠军 G=4 权重）")
     p.add_argument("--checkpoint", default=CHAMPION_CKPT)
     p.add_argument("--bc-epochs", type=int, default=60)
     p.add_argument("--out", default="logs/intp_A_prune")
@@ -94,7 +96,21 @@ def main(argv=None):
     layout_full = resolve_layout(cfg_cls_full())
     env_full, _ = build_env(cfg_cls_full, 20.0, 0.01, args.seed)
     worker = load_worker(args.checkpoint, env_full)
-    meta_ac, t_s = load_meta(args.checkpoint, env_full)
+    if int(args.n_groups) == 4:
+        meta_ac, t_s = load_meta(args.checkpoint, env_full)
+    else:
+        # P2c（G≠4）：冠军 meta 权重形状不匹配，随机初始化 G 分组 meta
+        from src.models.meta_controller import MetaActorCritic
+
+        cfg_m = cfg_cls_full().hierarchical
+        meta_ac = MetaActorCritic(
+            K=env_full.K, d_user=cfg_m.meta_d_user, hidden_dim=cfg_m.meta_hidden_dim,
+            n_heads=cfg_m.meta_n_heads, n_groups=int(args.n_groups),
+            group_level_alpha=cfg_m.group_level_alpha,
+            group_alpha_min=cfg_m.group_alpha_min, group_alpha_max=cfg_m.group_alpha_max,
+        )
+        t_s = cfg_m.T_s
+        print(f"[BC-init] P2c: meta 随机初始化 n_groups={args.n_groups}（不继承冠军 G=4）", flush=True)
     worker = worker.to(args.device)
     meta_ac = meta_ac.to(args.device)
 

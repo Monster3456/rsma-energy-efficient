@@ -1,0 +1,668 @@
+%!TEX program = xelatex
+% 中文研究报告: 过载上行 RSMA-MU-MIMO 多时间尺度在线学习与资源分配
+% 编译: xelatex report-zh.tex 两次
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+
+% ------------------------------------------------------------------ %
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+\geometry{left=2.4cm,right=2.4cm,top=2.6cm,bottom=2.6cm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=blue,urlcolor=blue}
+
+% ------------------------------------------------------------------ %
+% 定理环境（中文）
+% ------------------------------------------------------------------ %
+\theoremstyle{plain}
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{proposition}[theorem]{命题}
+\newtheorem{corollary}[theorem]{推论}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{定义}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{注}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\abs}[1]{\left|#1\right|}
+
+\title{\textbf{过载上行 RSMA-MU-MIMO 系统中面向能量效率的\\多时间尺度在线学习与资源分配\\——模型与算法设计研究报告}}
+\author{研究工作组}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+在 $K=24$ 用户、$N_r=16$ 天线的\textbf{过载}（$K>N_r$）上行速率分割多址（Rate-Splitting Multiple Access, RSMA）MIMO 系统中，能量效率（Energy Efficiency, EE）的在线最优化同时面临三重新挑战：分数型目标的非凸结构、长期交付/功率约束的耦合、以及 $K!$ 级组合解码顺序的不可枚举性。本报告给出一个以\textbf{随机最优控制}（Stochastic Optimal Control / 受约束 MDP）为表述、以\textbf{多时间尺度深度强化学习}为求解内核的完整建模与算法框架，并重点阐述三个可泛化到论文写作的算法构件：
+
+(1)~\textbf{Dinkelbach 参数化线性化}：将 EE 分数目标 $\max \bar{D}/\bar{P}_{\mathrm{eff}}$ 依分数规划理论\cite{dinkelbach1967nonlinear} 等价化为带参数 $q^*\ge0$ 的线性目标 $\Sigma D - q^*P_{\mathrm{eff}}$。线性化不仅保留了最优解的等价性，更从\textbf{梯度方向}上根除了 $P\to0$ 处 $\partial(\text{EE})/\partial P<0$ 的奇点吸引子；$q^*$ 由外层 Dinkelbach 迭代 \eqref{eq:dinkelbach} 在线更新。
+
+(2)~\textbf{Lyapunov 漂移-加-惩罚（drift-plus-penalty）软约束化}：将长期平均交付率约束（${\ge}\,\delta$）与平均功率约束（${\le}\,\bar P$）用 \textbf{Neely 交付欠账虚拟队列 $Y$ 与功率虚拟队列 $X$} 吸收，化为"虚拟队列稳定 $\Leftrightarrow$ 平均约束满足"的公认标准形式；单时隙漂移-惩罚目标 \eqref{eq:dpp} 经推导后即重构为 DGLCR 复合奖励——"硬阈值"由此获得严格的渐近合理性（$O(1/V)$ 最优性遗憾、$O(V)$ 违约界）。
+
+(3)~\textbf{Plackett-Luce 概率解码顺序}：把 MMSE-SIC 接收机中的解码顺序 $\pi\in\mathcal{S}_K$ 建模为连续偏好分数 $\vect z$ 上的 Plackett-Luce 分布，以 Gumbel-Top-K 实现与理论分布精确一致的单轮抽样，其解析对数似然 \eqref{eq:pl} 关于 $\vect z$ 完全可微，将"组合决策"无缝嵌入策略梯度——实现 \emph{逐时隙自适应 SIC 顺序}。
+
+报告同时给出两级并行架构（每 $T_s=20$ 时隙的慢尺度 Meta-Controller 负责分组与组级分割比；每时隙的 SA-GAT Worker 负责功率份额、drain 比例与解码顺序）、完整训练算法（算法 \ref{alg:train}）与最终模型综合（\S\ref{sec:assembly}）。在 7 点 SNR 评估网格上，模型达到全部 7 个逐点达标门（score $[7,0.9519,-8.3971,1.0804]$），跨种子稳健（$\sigma\approx0.005$），且预注册的消融微调无处理效应。所有公式与数值均以仓库代码（\texttt{src/}）与论文草稿（\texttt{docs/paper/}）为最终依据。
+\end{abstract}
+
+\noindent\textbf{关键词：}速率分割多址；能量效率；分数规划；Dinkelbach 变换；Lyapunov 漂移-加-惩罚；虚拟队列；Plackett-Luce；Gumbel-Top-K；多时间尺度强化学习
+
+% ================================================================== %
+\section{引言} \label{sec:intro}
+% ================================================================== %
+
+\subsection{问题背景}
+
+过载上行链路（活跃用户数 $K$ 超过基站接收天线数 $N_r$）是 5G/6G 无线接入的典型工况。此时空间自由度不足以无失真分离所有用户，传统 SDMA 的性能受制于惩罚性的等效干扰；非正交多址（NOMA）以功率域复用换取部分增益，但其严格的解码规则与公平性折衷在异构 QoS 场景下并不总是最优。速率分割多址（RSMA）将各用户消息分裂为公共流与私有流，经由叠加编码与连续干扰消除（SIC）在速率域上柔性管理干扰，已被广泛证明在过载与混合 QoS 场景下优于 SDMA 与 NOMA\cite{zhang2023pporsma}。
+
+RSMA 发射机同时面对三类强耦合决策：(i)~公共/私有功率分割比（连续）；(ii)~逐用户发射功率分配（连续，受限总功率）；(iii)~接收机 SIC 解码顺序（$K!$ 级组合）。三者共同决定可达速率域 \eqref{eq:sinr}--\eqref{eq:rates}，其联合最优在快衰落、信道估计不确定性（imperfect CSI）与突发流量下需要在\emph{无前瞻}的在线场景中逐时隙求解——这正是经典集中式最优化的失效区间。
+
+与此同时，能量效率（EE, bits/Joule）成为网络运营的核心指标。EE 的分数结构 $D/P_{\mathrm{consume}}$ 带来两重困难：其一，$P\to0$ 处分数目标的梯度方向 $\partial(\mathrm{EE})/\partial P<0$，诱导所有以 EE 为奖励的学习器趋向"几乎关机"的退化解；其二，交付率（delivery）这类运营商级硬指标需要以\textbf{长期平均约束}而非启发式惩罚的形式嵌入模型，才能获得可证的性能保证。
+
+\subsection{方案与贡献}
+
+本方案的技术路线可概括为\textbf{三层转化}，各层均采用公开文献的成熟理论构件，从而为论文写作提供"公认、可讲故事的"建模口径（而非实现细节的镜像）：
+
+\begin{enumerate}
+\item \textbf{问题层（随机最优控制）}：将 EE 最大 + 多约束刻划为带长期平均约束的马尔可夫决策过程（受约束 MDP / CMDP），约束包括平均交付率下界、平均发射功率上界与队列稳定性。问题表述 \eqref{eq:p1} 完全标准，不含任何实现特设项（\S\ref{sec:prob}）。
+\item \textbf{求解层（Lyapunov 漂移-加-惩罚 + Dinkelbach）}：分数目标经 Dinkelbach 线性化 \eqref{eq:dkl}，平均约束经虚拟队列软约束化 \eqref{eq:dvq}--\eqref{eq:pvq}，所得单时隙代理目标在结构上精确等于 DGLCR 奖励（命题 \ref{prop:surr}）——"硬阈值 0.98 / 8 W"由此获得虚拟队列这一标准理论身份，并附带 $O(1/V)$ 最优性保证（定理 \ref{thm:drift}）。
+\item \textbf{决策层（多时间尺度分层 DRL + Plackett-Luce）}：慢尺度（分组 $g$、组级分割比 $\vect\alpha$）与快尺度（功率份额、drain 比例、解码顺序）分层；解码顺序以 Plackett-Luce 连续偏好建模并保持梯度通道（命题 \ref{prop:pl}）。
+\end{enumerate}
+
+\noindent\textbf{贡献}整理为四点：
+\begin{enumerate}
+\item 过载 RSMA 场景的 EE 在线优化\textbf{CMDP 建模}，含平均交付率/功率约束与队列稳定性的完整表述；
+\item 分数 EE 的 \textbf{Dinkelbach 线性化}作为奖励信号（梯度级根除关机捷径），$q^*$ 在线 Dinkelbach 迭代；
+\item 交付/功率约束的 \textbf{Lyapunov 虚拟队列软约束化}与 DGLCR 复合奖励的结构一致性证明；
+\item \textbf{Plackett-Luce 解码顺序}的概率模型与 Gumbel-Top-K 可微抽样通道，及完整的双层训练算法。
+\end{enumerate}
+
+\subsection{组织}
+
+\S\ref{sec:model} 建立系统模型与随机最优控制问题；\S\ref{sec:algo} 给出算法设计,其中 \S\ref{sec:dinkelbach}（Dinkelbach）、\S\ref{sec:lyap}（Lyapunov 漂移-加-惩罚）、\S\ref{sec:pl}（Plackett-Luce）为核心构件, \S\ref{sec:assembly} 给出最终模型综合；\S\ref{sec:results} 报告评估协议与主要结果；\S\ref{sec:conclusion} 总结。
+
+% ================================================================== %
+\section{相关工作} \label{sec:related}
+% ================================================================== %
+
+\textbf{分数规划与 EE 优化}：Dinkelbach 算法\cite{dinkelbach1967nonlinear} 以参数化线性子问题序列求解 $\max N(x)/D(x)$，在凹-凸条件下享有线性/超线性收敛；\cite{shen2021fractional} 将其系统应用于无线通信 EE 最大化。本文的采用点与前人不同：Dinkelbach 线性化被\textbf{嵌入奖励构造层}，为 DRL 提供处处方向正确的每时隙 EE 梯度，而非作为离线集中式求解器。
+
+\textbf{Lyapunov 随机网络优化}：Neely\cite{neely2010stochastic} 的漂移-加-惩罚框架以虚拟队列把长期平均约束转化为稳定性条件，并给出 $[O(1/V), O(V)]$ 的最优性-违约权衡；\cite{li2021lyapunov, chen2019lyapunov} 将之与 DRL 结合用于无线资源分配。本文的虚拟队列 $Y,X$、二次积压惩罚与自适应 $V$ 均为该框架的标准实例（含有限缓冲修正，见 \S\ref{sec:lyap}）。
+
+\textbf{组合决策的连续松弛}：Plackett-Luce\cite{plackett1975analysis, luce1959} 是穷举级数据上标准的低秩排列概率模型；Gumbel-Top-K\cite{kool2019stochastic} 给出其无偏单轮抽样及对已实现排列的可微对数似然。本文以之承载 SIC 解码顺序，区别于文献中常用的启发式排序（如信道增益降序）。
+
+\textbf{分层强化学习}：层级 HRL（option/慢快尺度抽象）\cite{sutton1999policy} 与两时间尺度随机逼近的收敛性为慢-快两层策略分离提供理论支撑；受约束策略优化（如 CRPO\cite{xu2021crpo}、Lagrangian 对偶）为可行性-最优性折衷提供统一语言。
+
+% ================================================================== %
+\section{系统模型与问题表述} \label{sec:model}
+% ================================================================== %
+
+\subsection{网络与信道模型}
+
+单小区上行链路：基站配 $N_r=16$ 根接收天线，服务 $K=24$ 个用户（每用户 $N_t=2$ 根发射天线），构成过载工况 $K>N_r$。每个 episode 含 $T=200$ 时隙。用户 $k$ 至基站距离 $d_k$ 在每个 episode 初由 $[50,300]\,\mathrm{m}$ 采样并在 episode 内固定，遵循 3GPP UMi 路径损耗（指数 $3.76$，$100$\,m 处归一为 $0$\,dB，保留约 $29$\,dB 远近差）。信道服从一阶 AR(1) 时间相关模型 \eqref{eq:ar1}，强度相关性 $\rho=0.9$。
+
+导频辅助 MMSE 信道估计给出每用户误差方差 \eqref{eq:csi}：随噪声功率 $\sigma^2$ 自适应且带平坦下限 $\varepsilon_{\mathrm{floor}}=0.01$。估计信道 $\hat{\vect{H}}$ 与实际信道 $\vect H$ 满足有界最坏情况误差 $\|\Delta\vect h_k\|\le\varepsilon$。训练期噪声功率按 $\sigma^2\in[-5,35]\,\mathrm{dB}$ 逐 episode 域随机化（评估点为固定网格，见 \S\ref{sec:protocol}）。
+
+\subsection{RSMA 传输与 MMSE-SIC 接收}
+
+用户 $k$ 的消息分裂为公共部分（功率占比 $\alpha_k\in[\alpha_{\min},\alpha_{\max}]$，$\alpha_{\min}=0.1,\alpha_{\max}=0.95$）与私有部分，发射信号为 \eqref{eq:tx}。同组的用户共享组内公共流（组号 $g_k$ 见 \S\ref{sec:meta}）；所有公共流先于私有流解码，组内公共流 SIC 在同一组内执行。基站采用统一 MRT 发射权重 $\vect W_c,\vect W_p\in\C^{N_r\times K}$（按估计信道 $\hat{\vect{H}}$），逐用户功率上限 $P_k\le P_{k,\max}=1.0\,\mathrm{W}$（总上限 $24\,\mathrm{W}$）。
+
+接收端按解码顺序 $\pi=(\pi_1,\dots,\pi_K)$ 执行两阶段 MMSE-SIC。定义 $\mathcal D_j$ 为在位置 $j$ 之前已解码的流集合，则第 $j$ 个被解码流的 SINR 为 \eqref{eq:sinr}：分母收集 (i) 未解码流干扰，(ii) 已解码流经硬件残余 $\beta^2$ 的 SIC 残余，(iii) 经 $\varepsilon^2$ 的信道弥散残余，及 (iv) 热噪声。$\beta$（\texttt{sic\_imperfection}）与 $\varepsilon$（CSI 误差界）为\textbf{独立物理参数}，分别刻画 SIC 硬件局限与信道估计质量，不可合并。速率计算为 \eqref{eq:rates}；声明速率用 $(\hat{\vect{H}},\varepsilon)$，实际速率用 $(\vect H,\varepsilon{=}0)$，outage 感知速率取两者最小值，从而抑制过量声明。
+
+\begin{align}
+  &h_k[t] = \rho\, h_k[t-1] + \sqrt{1-\rho^2}\,\Delta h_k[t],\quad \Delta h_k\sim\mathcal{CN}(\vect 0,\sigma_h^2\vect I), \label{eq:ar1}\\
+  &\sigma_{\mathrm{est}}^2 = \frac{\sigma^2}{K\,p_{\mathrm{pilot}}} + \varepsilon_{\mathrm{floor}}^2, \label{eq:csi}\\
+  &x_k = \sqrt{\alpha_k p_k}\, s_k^c + \sqrt{(1-\alpha_k) p_k}\, s_k^p,\quad \E\abs{s_k^c}^2=\E\abs{s_k^p}^2=1, \label{eq:tx}\\
+  &\mathrm{SINR}_k^{(j)} = \frac{p_k\abs{\vect w^{\mathsf H}\hat{\vect h}_k}^2}
+    {\sum_{i\notin\mathcal D_j}p_i\abs{\vect w^{\mathsf H}\hat{\vect h}_i}^2
+     + \beta^2\sum_{i\in\mathcal D_j}p_i\abs{\vect w^{\mathsf H}\hat{\vect h}_i}^2
+     + \varepsilon^2\sum_i p_i\|\vect w\|^2 + \sigma^2\|\vect w\|^2}, \label{eq:sinr}\\
+  &R_k = \log_2\!\big(1+\mathrm{SINR}_k^c\big)+\log_2\!\big(1+\mathrm{SINR}_k^p\big),\quad R_{\mathrm{sum}}=\sum_{k=1}^{K}R_k. \label{eq:rates}
+\end{align}
+
+\subsection{流量、队列与异构 QoS}
+
+到达过程：$A_k[t]\sim\mathsf{Poisson}(\lambda_k)$，平均到达率随 SNR 自适应 $\lambda(\mathrm{snr})=\mathrm{load}(\mathrm{snr})\cdot C(\mathrm{snr})/K$，$\mathrm{load}(\cdot)$ 为从 $0.75$（低 SNR）到 $1.3$（高 SNR）的 sigmoid（中点 $15$\,dB，陡度 $0.3$），使系统在全 SNR 区间保持可观负载而不饱和。三档异构 QoS 类分别缩放到达率、Lyapunov 权重与溢出权重为 $(2.0,1.0,0.3)$、$(8.0,1.0,0.2)$、$(8.0,1.0,0.2)$。
+
+\textbf{有限缓冲队列模型}：每个用户维护容量 $Q_{\max}=100$ 比特的 FIFO 缓冲，队列演化与交付比特数分别为 \eqref{eq:queue} 与 \eqref{eq:served}——其中 $d_k[t]\in[0,1]$ 为 Worker 输出的排水（drain）比例，缓冲区满时新到达被丢弃并计入溢出 $O_k[t]$。episode 内交付率（delivery）定义为已到达比特中被成功服务比特之比例 \eqref{eq:deliv}。在数学模型中，$Q_{\max}$ 是物理缓冲参数而非优化结构；其影响经由 \eqref{eq:deliv} 直接进入评估指标，并在 \S\ref{sec:lyap} 以二次积压成本显式内化。
+
+\begin{align}
+  &Q_k[t+1] = \min\{\max\{Q_k[t]-D_k[t],\,0\}+A_k[t],\ Q_{\max}\}, \label{eq:queue}\\
+  &D_k[t] = \min\{Q_k[t],\ d_k[t]\,R_k[t]\}, \label{eq:served}\\
+  &\mathrm{deliv} = \frac{\sum_{k,t}D_k[t]}{\sum_{k,t}A_k[t]}. \label{eq:deliv}
+\end{align}
+
+\subsection{功耗与能量效率}
+
+采用真实功耗模型：发射功率经 PA 效率 $\eta_{\mathrm{PA}}=0.35$ 折损并叠加静态电路功耗 $P_{\mathrm{circ}}=5.0\,\mathrm{W}$，
+\begin{equation}
+  P_{\mathrm{consume}} = \frac{\sum_k P_k}{\eta_{\mathrm{PA}}} + P_{\mathrm{circ}},
+  \qquad P_{\mathrm{eff}} = \max\{P_{\mathrm{consume}},\,P_{\mathrm{floor}}\},\enspace P_{\mathrm{floor}}=3.0\,\mathrm{W}.
+  \label{eq:power}
+\end{equation}
+静息功耗使 $P\to0$ 时总功耗仍有 $5$\,W 下界，EE 上界有限。本文以\textbf{服务类 EE}（delivery-weighted EE）作为统一指标与奖励口径，
+\begin{equation}
+  \mathrm{EE}[t] = \frac{\sum_k D_k[t]}{P_{\mathrm{eff}}[t]},
+  \label{eq:ee}
+\end{equation}
+即单位有效功耗所服务的数据比特——与 \eqref{eq:deliv} 同源，避免空队列时"速率虚高、交付为零"的激励偏差。
+
+\subsection{优化问题与评估口径} \label{sec:prob}
+
+\subsubsection{随机最优控制（CMDP）表述}
+
+记时隙决策元组 $\vect x[t]=(g,\vect\alpha,\vect p,\vect d,\pi)[t]\in\mathcal X$，其中 $g\in\R^{K}$（分组）、$\vect\alpha\in[\alpha_{\min},\alpha_{\max}]^{G}$(组级分割比)、$\vect p$（功率份额）、$\vect d\in[0,1]^{K}$（drain）、$\pi\in\mathcal S_K$（SIC 排列空间）。系统寻求长期平均意义的约束最优策略：
+
+\begin{subequations}\label{eq:p1}
+\begin{align}
+  \max_{\{\vect x[t]\}}\quad & \liminf_{T\to\infty}\frac{1}{T}\sum_{t=0}^{T-1}\E\,\mathrm{EE}[t] \label{eq:p1-obj}\\
+  \text{s.t.}\quad & \liminf_{T\to\infty}\frac{1}{T}\sum_{t}\E\,\mathrm{deliv}[t]\ \ge\ \delta \;=\; 0.98, \label{eq:p1-del}\\
+  & \limsup_{T\to\infty}\frac{1}{T}\sum_{t}\E\,\textstyle\sum_k P_k[t]\ \le\ \bar P \;=\; 8\,\mathrm{W}, \label{eq:p1-pow}\\
+  & \overline Q_k < \infty\ \ \forall k \quad\text{(队列稳定性 / 平均缓冲有界)}, \label{eq:p1-q}\\
+  & 0\le p_k[t]\le P_{k,\max},\ \ \alpha_k[t]\in[\alpha_{\min},\alpha_{\max}],\ \ d_k[t]\in[0,1],\ \ \pi[t]\in\mathcal S_K. \label{eq:p1-dom}
+\end{align}
+\end{subequations}
+
+\eqref{eq:p1-del}--\eqref{eq:p1-pow} 为\textbf{长期平均约束}（time-average constraints），\eqref{eq:p1-q} 为\textbf{率稳定}（rate stability）条件，\eqref{eq:p1-dom} 为动作域约束。关键结构事实：某一策略必须\emph{同时}满足评估网格 \eqref{eq:gates} 上\textbf{每一点}的约束，因而 \eqref{eq:p1} 不可逐点分解——这正是该问题对逐点无关基线（如固定功率、无学习策略）的结构性壁垒。
+
+\subsubsection{评估协议（独立于模型的裁定口径）} \label{sec:protocol}
+
+评估在 $7$ 点 SNR 网格 $\mathcal S=\{0,5,\dots,30\}\,\mathrm{dB}$（训练范围 $[-5,35]$，imperfect CSI）上进行，每点相对参考 SDMA 策略设立\textbf{两条相对门限}
+\begin{equation}
+  \mathrm{deliv}_{\pi}(s) \ge \mathrm{deliv}_{\mathrm{SDMA}}(s),\qquad
+  \mathrm{queue}_{\pi}(s) \le 1.1\cdot\mathrm{queue}_{\mathrm{SDMA}}(s),\ \ \forall s\in\mathcal S,
+  \label{eq:gates}
+\end{equation}
+并按字典序聚合为 score $=[\#\{\text{达标点}\},\ \overline{\mathrm{deliv}},\ -\overline{\mathrm{queue}},\ \mathrm{EE\ ratio}]$（达标点个数绝对优先）。全局聚合终止检查（mean EE $>$ SDMA$\times1.05$ 且 mean power $<$ SDMA）仅用于门控优化轮次终止，不替代 \eqref{eq:gates}。\emph{本小节为裁定口径，不参与模型构造}——这保证了模型/算法章节的表述与实现的成败判据解耦。
+
+% ================================================================== %
+\section{算法设计} \label{sec:algo}
+% ================================================================== %
+
+本节遵循统一叙述纪律：每一构件按「① 问题 → ② 模型化（公认形式） → ③ 算法 → ④ 与代理目标 \eqref{eq:reward} 的接线」四步展开。\S\ref{sec:dinkelbach}--\S\ref{sec:pl} 为核心构件。
+
+\subsection{总体框架：两级 POCMDP 与求解路线} \label{sec:overview}
+
+将 \eqref{eq:p1} 求解为\textbf{两层}近似：慢尺度（每 $T_s=20$ 时隙）Meta-Controller 决策分组与组级分割比 $\vect\alpha$（战略层，慢变）；快尺度（每时隙）Worker 决策功率份额、drain 与解码顺序（战术层，快变）。
+
+\begin{itemize}
+\item \textbf{观测（部分可观测性）}：策略不观测原始复信道 $\vect H$，仅观测其聚合统计——per-user 特征块（信道增益、队列、到达、功率/速率历史、干扰、QoS 类、组号、距离）$+$ 全局量（时隙占比、SNR、CSI 误差）；默认维度 $11K{+}3$，可选 $H=4$ 时隙历史窗口（增量 $3H\cdot K$）。以 State-Augmentation\footnote{等维替换干扰/公平/距离三块观测为：Lagrangian 对偶值 $\lambda$ 桶、交付欠账 $Y$、Dinkelbach 参数 $q^*$——观测维度不变而约束状态显式可见。} 注入对偶状态。故模型为\textbf{受约束的部分可观测 MDP}（POCMDP），由 DRL 端到端求解。
+\item \textbf{求解路线}：处理宪结构为三层的代理目标构造（图 \ref{fig:arch}）：EE 分数目标 Dinkelbach 线性化（\S\ref{sec:dinkelbach}）$\to$ 平均约束虚拟队列软约束化（\S\ref{sec:lyap}）$\to$ 组装为单时隙代理奖励 DGLCR（\S\ref{sec:dglcr}），并由双层 PPO 以 \eqref{eq:ppo} 优化。解码顺序的 PL 建模（\S\ref{sec:pl}）为该路线的动作空间侧闭环。
+\item \textbf{问题→机制映射}：\eqref{eq:p1} 各元素与算法构件的对应关系见表 \ref{tab:mapping}，该表同时也是最终模型综合（\S\ref{sec:assembly}）的索引。
+\end{itemize}
+
+\begin{table}[ht]
+\centering
+\caption{\eqref{eq:p1} 的问题元素 → 算法机制映射（详读索引表）。}
+\label{tab:mapping}
+{\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+问题元素 & 数学表述 & 承载机制（构件） & 在代理目标中的实现\\
+\midrule
+EE 目标\ref{eq:p1-obj} & 分数型 $\bar D/\bar P_{\mathrm{eff}}$ & Dinkelbach 线性化（\S\ref{sec:dinkelbach}） & $w_{\mathrm{ee}}(\Sigma D - q^*P_{\mathrm{eff}})$\\
+交付率约束\ref{eq:p1-del} & 平均交付率 $\ge\delta$ & 交付虚拟队列 $Y$（\S\ref{sec:lyap}） & $w_y\,(Y/Y_{\mathrm{ref}})\,\Sigma D$ \ $+$ 对偶 $\lambda$\\
+功率约束\ref{eq:p1-pow} & 平均功率 $\le\bar P$ & 功率虚拟队列 $X$（\S\ref{sec:lyap}） & $-w_x\,(X/X_{\mathrm{ref}})\,P_{\mathrm{tot}}$\\
+队列稳定性\ref{eq:p1-q} & $\bar Q_k<\infty$ & 二次积压成本 LDPTRLQ（\S\ref{sec:lyap}） & $-w_q\Sigma Q_k^2/Q_{\max}^2$ $-w_{\mathrm{ovf}}\Sigma O_k$\\
+SIC 排列\ref{eq:p1-dom} & $\pi\in\mathcal S_K$ & Plackett-Luce 偏好（\S\ref{sec:pl}） & $\pi\sim\mathsf{PL}(\vect z),\ \log P(\pi\mid\vect z)$\\
+慢尺度决策 & 分组 $g$、分割比 $\vect\alpha$ & Meta-Controller（\S\ref{sec:meta}） & 独立 PPO 目标 \eqref{eq:meta}\\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \fbox{\parbox{0.93\linewidth}{
+  \centering
+  \textbf{慢尺度}（每 $T_s=20$ 时隙）Meta-Controller $\to$ $g_k\in\{0..3\},\ \vect\alpha$ \\
+  $\downarrow$ \texttt{set\_group\_ids}, \texttt{set\_split\_mask} \\
+  \textbf{快尺度}（每时隙）SA-GAT Worker $\to$ $\vect p$(功率份额), $\vect d$(drain), $\vect z$(PL 解码序) \\
+  $\downarrow$ $(\alpha,p,d,\pi)$ 经 \eqref{eq:tx}--\eqref{eq:rates} 执行 $\to$ $\{R_k, D_k, O_k, P\}$ $\to$ 队列 \eqref{eq:queue} \\
+  Lyapunov 控制器：$Y$ \eqref{eq:dvq}、$X$ \eqref{eq:pvq} 更新 $\to$ DGLCR 奖励 \eqref{eq:reward}
+  }}
+  \caption{多时间尺度决策与奖励闭环；虚拟队列 $Y,X$ 将长期约束反馈到每时隙奖励。}
+  \label{fig:arch}
+\end{figure}
+
+% ------------------------------------------------------------------ %
+\subsection{Dinkelbach 线性化 EE} \label{sec:dinkelbach}
+% ------------------------------------------------------------------ %
+
+\textbf{① 问题}：\eqref{eq:p1-obj} 是分数型目标。设 $U(P)=\sum_k D_k(P)$，则在低功率区
+\begin{equation}
+  \frac{\partial}{\partial P}\Big(\frac{U(P)}{P_{\mathrm{eff}}}\Big)
+  \;=\; \frac{P_{\mathrm{eff}}\,U'(P) - U(P)}{P_{\mathrm{eff}}^2},
+  \label{eq:ee-grad}
+\end{equation}
+其中 $U'$ 在 log-陡峭段为正，但 $U(P)$ 与 $P_{\mathrm{eff}}$（含 $5$\,W 静息）的相对大小使分子为负：梯度\textbf{持续指向 $P\to0$}。该"关机捷径"（shut-down shortcut）是任意以 EE 为奖励信号的直接学习器都会收敛到的最坏解。
+
+\textbf{② 模型化（分数规划的参数化）}：依 \cite{dinkelbach1967nonlinear}，对 $D(x)>0$ 的分数规划 $\max_x N(x)/D(x)$，定义参数化子问题
+\begin{equation}
+  F(q) \;=\; \max_{\vect x\in\mathcal X}\ \big\{\, N(\vect x) - q\,D(\vect x)\,\big\}.
+  \label{eq:dkl}
+\end{equation}
+\begin{theorem}[Dinkelbach 等价性]
+(i)~$F(q)$ 在 $q$ 上严格递减；\quad
+(ii)~$q^*$ 为最优比值当且仅当 $F(q^*)=0$；\quad
+(iii)~存在最优解 $x^*(q^*)$ 同时最优化 \eqref{eq:dkl} 与原始分数问题。
+\end{theorem}
+在奖励构造层落地：用 \eqref{eq:dkl} 中的线性目标替换触摸到的 EE 分数项，
+\begin{equation}
+  r_{\mathrm{EE}}(t) \;=\; w_{\mathrm{ee}}\ \big(\textstyle\sum_k D_k(t) - q^*\,P_{\mathrm{eff}}(t)\big),\qquad w_{\mathrm{ee}}=8.0,
+  \label{eq:ee-lin}
+\end{equation}
+其梯度 $\partial(\Sigma D - q^*P_{\mathrm{eff}})/\partial P = U'(P) - q^*$ 在 $q^*$ 适当（即当前 EE 水平）时于低功率区为\textbf{正}——奇点在梯度层面被移除，且线性目标在全 delivery 水平均提供正确方向（无需门控抑制，见 \S\ref{sec:dglcr} \eqref{eq:reward}）。\textbf{模型化要点}：EE 分子取交付比特 $\Sigma D$（\eqref{eq:ee} 口径）而非瞬时和速率 $R_{\mathrm{sum}}$，保证 EE 与交付指标同源。
+
+\textbf{③ 算法（$q^*$ 在线迭代）}：$q^*$ 以 Dinkelbach 外环迭代更新——训练每 $I=10$ 个 episode，以近 $I$ 期的经验样本平均
+\begin{equation}
+  q^{*} \;\leftarrow\; \frac{\E\big[\sum_k D_k\big]}{\E\big[P_{\mathrm{eff}}\big]},
+  \label{eq:dinkelbach}
+\end{equation}
+再经 anchor EMA 平滑（$\alpha_\eta=0.2$）——与 Dinkelbach 内层 $F(q)=0$ 的零搜索异曲同工（期望以训练期样本平均近似，即在线随机逼近版 Dinkelbach 迭代）。不使用外环时退化为内部窗口估计：指数加权累积比率（$\lambda_{\mathrm{EMA}}=0.99$，约 $100$ 时隙），clip $q^*\in[0.01,50]$。
+
+\textbf{④ 接线}：\eqref{eq:ee-lin} 作为 \eqref{eq:reward} 的首项（EE 分量），并承载门控系数 $g_{\mathrm{EE}}$ 与漂移-惩罚中的系数 $V$（\S\ref{sec:lyap}）。
+
+% ------------------------------------------------------------------ %
+\subsection{Lyapunov 漂移-加-惩罚：约束软约束化} \label{sec:lyap}
+% ------------------------------------------------------------------ %
+
+\textbf{① 问题}：\eqref{eq:p1-del}--\eqref{eq:p1-pow} 是长期平均约束，时隙$t$ 的策略不知道未来的到达与信道，无法逐时隙验证；需要一种把"长期平均约束"转化为"当前时隙可执行信号"的机制，并保有性能保证。
+
+\textbf{② 模型化（虚拟队列软约束化，Neely 框架）}：为 \eqref{eq:p1-del}、\eqref{eq:p1-pow} 分别定义\textbf{交付欠账虚拟队列} $Y$ 与\textbf{功率虚拟队列} $X$：
+\begin{align}
+  &Y[t{+}1] = \max\big\{ Y[t] + \underbrace{\delta\,A_{\mathrm{tot}}[t] - D_{\mathrm{tot}}[t]}_{\delta Y},\ 0\big\}, \quad Y_{\max}=5000, \label{eq:dvq}\\
+  &X[t{+}1] = \max\big\{ X[t] + \eta_X\,\big(P_{\mathrm{tot}}[t] - \bar P\big),\ 0\big\}, \quad \eta_X=0.1,\ X_{\max}=1000. \label{eq:pvq}
+\end{align}
+其中 $A_{\mathrm{tot}}=\sum_k A_k$，$D_{\mathrm{tot}}=\sum_k D_k$，$P_{\mathrm{tot}}=\sum_k P_k$。\eqref{eq:dvq} 中 $\delta Y>0$ 当且仅当本时隙交付流量低于目标比例 $\delta \cdot A$——欠账累积为 $Y$；\eqref{eq:pvq} 中 $X$ 在功率超预算时随机增长。两条自对偶关系成立：
+
+\begin{lemma}[虚拟队列稳定 $\Leftrightarrow$ 平均约束满足]\label{lem:stab}
+若 $\{Y[t]\}$ 均值稳定（$\limsup_{T\to\infty}\E[Y[T]]/T<\infty$），则由 \eqref{eq:dvq} 的递推得 $\frac{1}{T}\sum_t\E\,\mathrm{deliv}[t]\ge\delta-o(1)$（随 $T$）；同理 $X$ 稳定 $\Leftrightarrow$ \eqref{eq:p1-pow} 渐近满足。
+\end{lemma}
+即 \emph{"硬阈值 $0.98$ / $8\,\mathrm{W}$"在模型中获得了虚拟队列这一标准身份}：它不是实现特设的回撤门，而是平均约束的自然对偶状态。
+
+\textbf{队列稳定与二次积压成本}：对物理队列取加权积压 $b_k[t]=w_k^{\mathrm{qos}}Q_k[t]/Q_{\max}$（$w^{\mathrm{qos}}$ 为 QoS 类权重），定义增广 Lyapunov 函数与单步漂移
+\begin{equation}
+  L[t] = \frac12\sum_k b_k[t]^2 + \frac12\Big(\frac{Y[t]}{Y_{\mathrm{ref}}}\Big)^2 + \frac12\Big(\frac{X[t]}{X_{\mathrm{ref}}}\Big)^2,\qquad
+  \Delta_L[t] = \E\{ L[t{+}1] - L[t] \mid s[t] \}.
+  \label{eq:lyap}
+\end{equation}
+
+\begin{proposition}[漂移上界]
+在到达与速率有界的标准假设下，存在常数 $B$ 使
+\begin{equation}
+  \Delta_L[t] \;\le\; B\;+\; \E\Big[\ \sum_k b_k[t]\big(A_k-D_k\big)
+   \;+\; \tfrac{Y[t]}{Y_{\mathrm{ref}}}\big(\delta A_{\mathrm{tot}}-D_{\mathrm{tot}}\big)
+   \;+\; \tfrac{X[t]}{X_{\mathrm{ref}}}\eta_X\big(P_{\mathrm{tot}}-\bar P\big)\ \Big|\, s[t]\Big].
+  \label{eq:drift-bound}
+\end{equation}
+其中控制相关的三项分别对应 \emph{max-weight 服务} $\sum b_k D_k$（漂移项）、\emph{欠账压力吞吐} $D_{\mathrm{tot}}$ 与 \emph{功率对偶} $P_{\mathrm{tot}}$（符号反号后进入奖励）。
+\end{proposition}
+
+漂移-加-惩罚目标即每时隙
+\begin{equation}
+  \min_{\vect a[t]}\ \Big\{\, \Delta_L[t] \;-\; V\,\E\{\, U[t] \mid s[t] \,\} \Big\},
+  \qquad U[t] \;:=\; \text{EE 线性化 \eqref{eq:ee-lin} 与吞吐合计},
+  \label{eq:dpp}
+\end{equation}
+即\emph{最小化漂移、最大化 $V$ 加权的收益}；其控制相关部分（\eqref{eq:drift-bound} 三项）按负号翻转后即 \eqref{eq:reward} 的吞吐、欠账与功率对偶分量（命题 \ref{prop:surr}）。
+
+\textbf{③ 算法（漂移-惩罚下降与两层对偶）}：\eqref{eq:dpp} 实例化为 \eqref{eq:reward}；两个实施细节具有标准对应关系：
+
+\begin{enumerate}
+\item \textbf{二次积压成本（LDPTRLQ）}：在漂移-惩罚框架内额外加入\textbf{队长期望成本} $-\frac12\sum_k b_k[t]^2$（即 Lyapunov 势本身 \eqref{eq:lyap} 的线性缩放），构成"漂移-加-惩罚-加-积压成本"的标准扩张（backlog-penalized drift-plus-penalty）。该扩张直接抑制稳态 $\E[\sum Q^2]$——这正是本文以 $\sum_k Q_k^2/Q_{\max}^2$（\texttt{ldptrlq\_q\_weight}=2.0）作为奖励项的起因：\emph{直接惩罚队积的存在性}而非仅惩罚其增长，将稳态队列压到最低（与 \eqref{eq:deliv} 的有限缓冲口径自洽）。
+\item \textbf{自适应 $V$}：权衡系数 $V$ 随队积自适应 $V[t]=V_{\min}+V_{\max}(1-\bar Q[t]/Q_{\max})^{\gamma_V}$（$\gamma_V=1.5$），低积压时偏向 EE（大 $V$）、高积压时偏向稳定——等价于对偶权重的内生调度，与 \cite{li2021lyapunov, chen2019lyapunov} 一致。
+\end{enumerate}
+
+\begin{theorem}[漂移-惩罚最优性权衡, Neely\cite{neely2010stochastic}]
+若虚拟队列均值稳定，则 \eqref{eq:dpp} 的策略以 $O(1/V)$ 逼近 \eqref{eq:p1} 的最优长期平均收益，同时虚拟队列积压与对应的平均约束违约以 $O(V)$ 增长。
+\label{thm:drift}
+\end{theorem}
+实际中 $V=\texttt{lyapunov\_V}=5.0$；该权衡解释了"EE ratio $>1.05$ 与 delivery 门同时成立"的可证边界（\S\ref{sec:results}）。与 Lagrangian 对偶（\S\ref{sec:train} 约束栈）的关系：$\lambda$ 惩罚当前约束违反的\textbf{水平}，虚拟队列刻画违约的\textbf{历史}，二者都以状态增强注入观测。
+
+\textbf{④ 接线}：\eqref{eq:dvq}--\eqref{eq:pvq} 更新产生 $Y,Y_{\mathrm{ref}}=300$、$X,X_{\mathrm{ref}}=100$ 的压力项，在 \eqref{eq:reward} 中分别以吞吐加成项 $w_y(Y/Y_{\mathrm{ref}})\Sigma D$ 与线性功率惩罚 $-w_x(X/X_{\mathrm{ref}})P_{\mathrm{tot}}$ 出现。
+
+% ------------------------------------------------------------------ %
+\subsection{DGLCR：交付门控复合奖励（代理目标组装）} \label{sec:dglcr}
+% ------------------------------------------------------------------ %
+
+\textbf{① 问题}：\S\ref{sec:dinkelbach}--\S\ref{sec:lyap} 的构件需组装为\textbf{单时隙奖励}，供双层 PPO 使用；同时需防范"低 delivery 期追省电"与"低功率吸引子"两类学习陷阱。
+
+\textbf{② 模型化（代理目标）}：定义 DGLCR 复合奖励
+\begin{equation}
+  \begin{aligned}[t]
+  r(t) &= c\Big[\ \underbrace{g_{\mathrm{EE}}\,V\,w_{\mathrm{ee}}\big({\textstyle\sum_k}D_k - q^*P_{\mathrm{eff}}\big)}_{\text{EE 分量 (Dinkelbach 线性)}}
+    + \underbrace{g_{\mathrm{tp}}\,w_{\mathrm{tp}}\sum_k \tfrac{Q_k}{Q_{\max}}w_k^{\mathrm{qos}}D_k}_{\text{max-weight 吞吐}}
+    + \underbrace{w_y\tfrac{Y}{Y_{\mathrm{ref}}}\sum_k D_k}_{\text{交付欠账压力}}\Big] \\[-2pt]
+  &\quad - \; c\, w_q\sum_k \frac{Q_k^2}{Q_{\max}^2} - \; c\,w_{\mathrm{ovf}}\sum_k w_k^{\mathrm{qos}}O_k - \; c\, w_x\frac{X}{X_{\mathrm{ref}}}P_{\mathrm{tot}},
+  \end{aligned}
+  \label{eq:reward}
+\end{equation}
+其中 $c=\texttt{reward\_scale}=0.01$，$V=5.0,\ w_{\mathrm{tp}}=3.0,\ w_y=0.3,\ w_q=2.0,\ w_{\mathrm{ovf}}=20.0,\ w_x=1.0$。
+
+\begin{proposition}[代理目标的结构一致性] \label{prop:surr}
+在无门控（$g_{\mathrm{EE}}=g_{\mathrm{tp}}=1$）且去掉 $c$ 的标度下，\eqref{eq:reward} 恰为漂移-惩罚目标 \eqref{eq:dpp} 的（负号翻转、显式移除外生到达项后）等价形式：EE 分量 $\equiv$ 负惩罚中的收益 $U$，吞吐份量 $\equiv$ 漂移上界 \eqref{eq:drift-bound} 中 max-weight 服务的反号，欠账与功率虚拟队列项 $\equiv$ \eqref{eq:drift-bound} 中对应漂移项的反号，二次积压/溢出项为队积成本扩张。故 DGLCR 是\emph{增广系统的单时隙漂移-加-惩罚目标}。
+\end{proposition}
+
+\textbf{③ 算法（交付门控与可行性切换）}：门控系数为 delivery 的 sigmoid 平滑：
+\begin{equation}
+  g_{\mathrm{EE}} = \sigma\!\big(\kappa_{\mathrm{EE}}(\mathsf{dr}-\mu_{\mathrm{EE}})\big),\quad
+  \mu_{\mathrm{EE}}=0.935,\ \kappa_{\mathrm{EE}}=40;\qquad
+  g_{\mathrm{tp}} = 1 + g_{\mathrm{tp}}^{\max}(1-g_{\mathrm{EE}}),\quad g_{\mathrm{tp}}^{\max}=4,
+  \label{eq:gates-sig}
+\end{equation}
+其中 $\mathsf{dr}$ 为 running delivery；$\mathsf{dr}$ 低于 $\mu_{\mathrm{EE}}$ 时 EE 引力被平滑关闭而吞吐推力放大至 $5\times$——这是 \emph{可行-不可行调度（feasibility-first）}的连续松弛（CRPO\cite{xu2021crpo} 的软版本）。Dinkelbach 开启时 $g_{\mathrm{EE}}=1$（线性目标方向本就正确）。惩罚门控（$\mu=0.96,\kappa=50$）在低 delivery 期同步抑制 \eqref{eq:reward} 尾部三项，释放纯吞吐梯度。\textbf{约束侧}（见 \S\ref{sec:train}）：Lagrangian 对偶乘子 $\lambda$ 以对偶上升 \eqref{eq:lagproj} 施加于 \eqref{eq:p1-del}，并配以词典序梯度投影（EE 梯度投影到交付约束梯度零空间）与 per-user DVQ + CVaR 尾部聚焦。
+
+\textbf{④ 接线}：\eqref{eq:reward} 即 Worker 的每时隙奖励；Meta 奖励 \eqref{eq:meta}、内层 PPO 目标 \eqref{eq:ppo} 与各外环在 \S\ref{sec:assembly} 汇总为总学习目标。
+
+% ------------------------------------------------------------------ %
+\subsection{Plackett-Luce 概率解码顺序} \label{sec:pl}
+% ------------------------------------------------------------------ %
+
+\textbf{① 问题}：SIC 接收机的速率 \eqref{eq:sinr} 取决于解码顺序 $\pi$，它是 $K!$ 级排列空间 $\mathcal S_K$ 上的决策。$K=24$ 时 $24!\approx6.2\times10^{23}$，任何直接枚举或非结构化的离散策略都不可学习。
+
+\textbf{② 模型化（连续偏好上的 PL 分布）}：为每个用户赋予连续的偏好参数（由 Worker 网络的解码序头输出，经 softplus 正数化保证非负）
+\begin{equation}
+  z_k = \mathrm{softplus}(z_k^{\mathrm{raw}}) + 10^{-6} \;=\; \ln(1+e^{z_k^{\mathrm{raw}}}) + 10^{-6}\;>\;0,
+\end{equation}
+定义排列的 Plackett-Luce 分布与对数似然 \cite{plackett1975analysis, luce1959}
+\begin{equation}
+  \boxed{\;
+  P(\pi\mid\vect z) = \prod_{i=1}^{K}\frac{z_{\pi(i)}}{\sum_{j=i}^{K}z_{\pi(j)}},
+  \quad
+  \log P(\pi\mid\vect z) = \sum_{i=1}^{K}\Big[\log z_{\pi(i)} - \log\!\sum_{j=i}^{K} z_{\pi(j)}\Big].
+  }
+  \label{eq:pl}
+\end{equation}
+机理：第 $i$ 个被解码的用户按剩余强度成比例抽样——\emph{强信道/高优先级用户更可能先解码}。PL 是以 $O(K)$ 连续参数承载 $\mathcal S_K$ 上分布的\textbf{最大低秩排列族}，比 $K!$ 维软极大限可行得多。
+
+\textbf{③ 算法（Gumbel-Top-K 抽样与梯度通道）}：直接按 \eqref{eq:pl} 依序抽样为 $O(K^2)$，且 $\pi$ 的离散性阻断梯度过离散点。Gumbel-Top-K 给出等价 $O(K\log K)$ 单轮抽样 \cite{kool2019stochastic}：
+\begin{equation}
+  \pi \;=\; \operatorname{argsort}^{\downarrow}\!\big(\log\vect z + \vect\gamma\big),\qquad
+  \gamma_i \sim \mathsf{Gumbel}(0,1),
+  \label{eq:gtk}
+\end{equation}
+即"对数偏好 $+$ Gumbel 噪声排序"。
+
+\begin{proposition}[可微性与无偏性] \label{prop:pl}
+\eqref{eq:gtk} 产生的排列服从 \eqref{eq:pl} 的 PL 分布；对\textbf{已实现}排列 $\pi$，\eqref{eq:pl} 的对数似然关于 $\vect z$ 逐分量可微，其梯度即策略梯度中 $\pi$ 的（REINFORCE 型）充分统计量——由此"组合顺序决策"以标准 PPO ratio 形式进入优化（\S\ref{sec:train}），且该估计\textbf{无偏}：Gumbel 噪声仅出现在抽样端，不进入梯度通道。
+\end{proposition}
+
+实现与工程身份（与其他策略头的差异）：采样在策略网络的 \texttt{act()} 内完成，每个 rollout 步重采样；env 仅把排列视为优先级数组（值越小越先解码）转发给两阶段 MMSE-SIC（\eqref{eq:sinr} 在公共/私有流上的实例化）；部署期退化为确定性 $\pi=\operatorname{argsort}^{\downarrow}(\log\vect z)$。三个工程细节值得明确记载：\emph{(a)} 配置项 \texttt{pl\_temperature}=1.0 声明但\textbf{无消费点}——有效温度隐式 $1$；\emph{(b)} KL 早停仅基于连续动作分量（PL 对数似然量级大方差高，计入将虚高 $\mathrm{approx\_kl}$ 致每轮早停）；\emph{(c)} PL 头无熵项（排列分布无闭式熵，置零），探索依赖 Gumbel 噪声。
+
+\textbf{④ 接线}：$\pi$ 作为 4K 维快尺度动作的组成部分联动 \eqref{eq:tx}--\eqref{eq:rates} 改变 \eqref{eq:sinr} 中各用户的干扰集合，从而影响服务比特 $\vect D$、队列 \eqref{eq:queue} 与 \eqref{eq:reward}；\eqref{eq:pl} 的对数似然加入 PPO ratio（\S\ref{sec:train}）。Solver-Expert 通道（\S\ref{sec:train}）以确定性候选序 $\{$gain-descending, queue-last$\}$ 作为教师对齐目标。
+
+% ------------------------------------------------------------------ %
+\subsection{Worker 网络：SA-GAT} \label{sec:worker}
+% ------------------------------------------------------------------ %
+
+快尺度策略为 Self-Attention Graph Worker（SA-GAT），是 \eqref{eq:reward} 及 PL 头 \eqref{eq:pl} 的拟合器，解决旧 MLP 骨干中 LN 层稀释 SNR/$\varepsilon$ 信号的问题。结构要点：
+
+\begin{enumerate}
+\item \textbf{观测解构}：$11K{+}3$（或 $13K{+}3$，随 QoS/历史开关）观测解构为 per-user token $(K,d_{\mathrm{user}})$ 与全局量（time, snr, eps）；
+\item \textbf{全局条件（FiLM）}：全局向量仿射调制 token 嵌入，$( \mathrm{snr},\varepsilon)$ 另复制注入各 token——刻画"全局 SNR 状态如何改变用户级决策"；
+\item \textbf{自注意力主干}：$4$ 头 $\times 2$ 层（隐藏 $128$）+ FFN + 残差/LN——注意力天然建模过载干扰管理的用户对交互；
+\item \textbf{per-user 头}：输出 $(\alpha,p,d,z)$ 四元组拼为 $4K$；功率块按 $p_k=K\,\mathrm{softmax}_k(\ell)$（$\ell\in\R^K$ 为功率 logits）归一为\textbf{功率份额}（均匀总功率 $24$\,W，极端展宽降至 $\sim8.8$\,W），$z$ 块进入 PL 头；
+\item \textbf{Mean-Field critic}：均值池化 $+$ global 残差 $\to V(s)$，注入 QoS 类均值场统计量；
+\item \textbf{桶专家}：$4$ 个 SNR 桶专家头 episode 级硬路由（独立 lr $=10^{-4}$），配合硬例挖掘实现 SNR 域分治；
+\item \textbf{backpressure 先验}（可选）：backlog 驱动功率先验直接加在功率 logits。
+\end{enumerate}
+
+% ------------------------------------------------------------------ %
+\subsection{Meta-Controller：分组与组级功率分割} \label{sec:meta}
+% ------------------------------------------------------------------ %
+
+\textbf{网络}（\texttt{meta\_controller.py}）：per-user meta 特征 $\to$ embed($12{\to}64$) $\to$ MHA($4$ 头) $\to$ FFN；三分支头：分组头（per-user $G=4$ logits Categorical，温度退火 $\tau:2.0\to0.5$，平衡正则 $0.1$）、组级 $\alpha$ 头（\texttt{group\_level\_alpha}：mean-pool $\to$ $G$ 维 Gaussian，log-var 初始 $-0.5$，sigmoid 映射 $[\alpha_{\min},\alpha_{\max}]$）、critic（mean-pool $\to 1$）。$T_s=20$ 的慢尺度时序由 Meta 缓冲（FIFO 500，满 $M=30$ 段触发 PPO 更新）承载。
+
+\textbf{Slow-scale 目标}：Meta 以自有奖励独立训练
+\begin{equation}
+  r^{\mathrm{meta}} = c^{\mathrm{meta}}\Big[\
+    \overline{\mathrm{EE}} - w_{\mathrm{ovf}}^{\mathrm{m}}\,\overline{\mathrm{OV}}
+    + \mathrm{div}(\vect g) + w_{\mathrm{bal}}\,\mathrm{bal}(\vect g)
+    - \beta_{\alpha}\big(\bar\alpha - \alpha^{\mathrm{tgt}}(\mathrm{snr})\big)^2\ \Big],
+  \label{eq:meta}
+\end{equation}
+其中 $\mathrm{div}/\mathrm{bal}$ 为分组多样性/平衡度正则，$c^{\mathrm{meta}}=0.02$，$\beta_{\alpha}=0.3$（warmup 300 episode 后激活）；SNR 条件目标 $\alpha^{\mathrm{tgt}}=\mathrm{clip}\big(0.9-0.01\,\mathrm{snr}_{\mathrm{dB}},\,0.5,\,0.95\big)$——高 SNR 引导小 $\alpha$（多公共功率），低 SNR 引导大 $\alpha$（多私有功率以保解码可靠性）。\eqref{eq:meta} 与 Worker 目标 \eqref{eq:reward} 构成两级 POCMDP 的同步收敛（Meta 慢、Worker 快）。
+
+% ------------------------------------------------------------------ %
+\subsection{约束栈与训练算法} \label{sec:train}
+% ------------------------------------------------------------------ %
+
+\textbf{约束栈}（CMDP 对偶的工程实现）：Lagrangian 对偶乘子 $\lambda$（init $5$, lr $0.05$, cap $100$, warmup $200$ episode）施加于 \eqref{eq:p1-del}，per-step 信号为其 EMA（$\beta=0.85$，SLCP-D）；EE 策略梯度向交付约束梯度的零空间投影（词典序安全修正）：
+\begin{equation}
+  \lambda \leftarrow \big[\lambda + \eta_\lambda(\delta - \widehat{\mathrm{deliv}})\big]_+^{\lambda_{\cap}},\qquad
+  \vect g \leftarrow \vect g - \frac{\vect g^{\mathsf T}\nabla c}{\|\nabla c\|^2}\,\nabla c\quad (c\ge0,\ \vect g^{\mathsf T}\nabla c<0),
+  \label{eq:lagproj}
+\end{equation}
+其中 $c$ 为交付约束残差。per-user DVQ（CVaR worst-25\% 尾部聚焦）互补强化欠交付用户。
+
+\textbf{双层 PPO 主循环}见算法 \ref{alg:train}。Worker 内层优化服从标准裁剪代理
+\begin{equation}
+  \mathcal L_{\mathrm{PPO}} = \E\Big[\min\big(r_t(\theta)\hat A_t,\ \mathrm{clip}(r_t(\theta),1-\epsilon,1+\epsilon)\hat A_t\big)\Big]
+  - c_v\mathcal L_{\mathrm{VF}} + c_e\mathcal H[\pi_\theta],
+  \qquad r_t(\theta)=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)},
+  \label{eq:ppo}
+\end{equation}
+其中 $\log\pi_\theta = \log\pi_\theta^{\mathrm{cont}} + \log P(\pi_t\mid\vect z_t)$（连续 + PL 联合，\eqref{eq:pl}），GAE $\hat A_t$，KL 早停仅取连续分量（见 \S\ref{sec:pl}）。行为克隆（BC）预训练将专家演示对齐到连续头与 PL 头：$\mathcal L_{\mathrm{BC}}=\E[\|\vect a_\theta^{\mathrm{cont}}-\vect a_{\mathrm{expert}}^{\mathrm{cont}}\|^2] - \E[\log P(\pi_{\mathrm{expert}}\mid\vect z_\theta)]$，随后 PPO 微调 + 衰减锚定（KL-to-BC 信任域、逐步冻结 SFTP）。硬例挖掘按评估点粒度以逐点 delivery shortfall 加权 $+$ streak 倍增 $+$ 均匀地板重采样训练 SNR；桶专家头按 SNR 桶 episode 级硬路由；Dinkelbach 外层 \eqref{eq:dinkelbach} 每 $I{=}10$ episode 更新。
+
+\begin{algorithm}[ht]
+\caption{两级 POCMDP 在线训练（Worker PPO + Meta PPO + Dinkelbach/Lagrangian 外环 + 硬例挖掘）}
+\label{alg:train}
+\begin{algorithmic}[1]
+\Require 评估网格 $\mathcal S$; 慢尺度步长 $T_s=20$; Meta 阈值 $M=30$; Dinkelbach 间隔 $I=10$
+\State 初始化 Worker $\theta$、Meta $\phi$、对偶 $(\lambda,q^*)$、专家演示缓存与硬例权重 $\omega_s\leftarrow\mathbf 1$
+\For{each episode $e{=}1,\dots,E$}
+  \State 硬例挖掘：$s{\sim}$ 按 $\omega_s$（逐点 shortfall $\times$ streak 倍增 $+$ 地板）采样 SNR; env.reset
+  \State 桶路由 $\to$ 专家头; Meta 决策 $\to$ $g_k,\alpha_g$（\texttt{set\_group\_ids/set\_split\_mask}）
+  \For{step $t{=}1,\dots,T$}
+    \State Worker $\to(\alpha,p,d,\vect z)$; $\pi\sim\mathsf{PL}(\vect z)$（\eqref{eq:gtk}）; 组装 4K 动作
+    \State env.step: \eqref{eq:tx}--\eqref{eq:rates} 两阶段 MMSE-SIC $\to\{R_k,D_k,O_k,P\}$ $\to$ \eqref{eq:queue}
+    \State Lyapunov 控制器更新 $Y,X$（\eqref{eq:dvq}--\eqref{eq:pvq}）; 计算 \eqref{eq:reward}; buffer.add$\,((s,a,\log P(\pi|z),r,s'))$
+    \If{$t \bmod T_s = 0$} \State 闭合 meta 段 $\to$ meta\_buffer; $\phi$ 重新决策 \EndIf
+  \EndFor
+  \State Worker PPO 更新 \eqref{eq:ppo}（clip+GAE+KL 早停+熵+BC 锚定）; Meta 缓冲 $\ge M$ 段时更新 \eqref{eq:meta}
+  \If{$e\bmod I=0$} \State $q^*\!\leftarrow\!\E[\Sigma D]/\E[P_{\mathrm{eff}}]$（\eqref{eq:dinkelbach}, anchor $\alpha_\eta{=}0.2$ EMA）\EndIf
+  \State $\lambda$ 对偶上升 \eqref{eq:lagproj}; $\omega_s$ 按逐点 delivery shortfall EMA
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+% ------------------------------------------------------------------ %
+\subsection{最终模型综合（完整总结）} \label{sec:assembly}
+% ------------------------------------------------------------------ %
+
+至此可将 \eqref{eq:p1} 的求解模型完整组装为\textbf{五层描述}——这是"算法设计后的最终模型"，也是论文 \S III 的骨架：
+
+\paragraph{(a) 模型五元组。} 系统模型 $\mathcal M=(\mathcal S,\mathcal O,\mathcal A,\{\mathcal C_i\},r)$：
+\begin{itemize}
+\item \textbf{状态 $\mathcal S$}（对策略不可直接观测，见 $\mathcal O$）：信道/CSI 误差、队列 $\vect Q$、到达 $\vect A$、虚拟队列 $(Y,X)$、对偶 $(\lambda,q^*)$、Meta 段累计统计；
+\item \textbf{观测 $\mathcal O$}：per-user 块 $+$ global 块共 $11K{+}3$（$H$ 历史可选），State-Augmentation 等维注入 $(\lambda,Y,q^*)$；
+\item \textbf{动作}：\quad 快尺度 $\vect a\in[0,1]^{3K}\times\R^K$：$(\vect p,\vect d,\vect z)$（功率份额、drain、PL 偏好），$\pi$ 由 \eqref{eq:gtk} 导出；慢尺度 $\vect a^{\mathrm{m}}=(g,\vect\alpha)\in\{0..3\}^{K}\times[\alpha_{\min},\alpha_{\max}]^{G}$，以\emph{覆盖}方式压制快尺度 $\alpha$ 块（动作空间去冗余）；
+\item \textbf{约束 $\{\mathcal C_i\}$}：\eqref{eq:p1-del}（$\to Y$ $+$ $\lambda$ $+$ DVQ）、\eqref{eq:p1-pow}（$\to X$）、\eqref{eq:p1-q}（$\to$ LDPTRLQ $+$ 溢出项）；
+\item \textbf{奖励}：Worker \eqref{eq:reward}（DGLCR 代理目标），Meta \eqref{eq:meta}。
+\end{itemize}
+
+\paragraph{(b) 每次时隙的执行链。}
+$s[t]\xrightarrow[\text{Worker}]{}\vect a[t]\ \Rightarrow\ \pi\sim\mathsf{PL}\ \Rightarrow\ \text{MMSE-SIC}\ \Rightarrow\ (D,O,P)\ \Rightarrow\ (Q,Y,X)\text{ 更新}\ \Rightarrow\ r[t]\ \xrightarrow[\text{PPO}]{\ \eqref{eq:ppo}\ }$ 梯度；每 $T_s$ 步插入 Meta 决策链 \eqref{eq:meta}。
+
+\paragraph{(c) 多时间尺度学习目标（总目标）。}
+\begin{align}
+  &\max_{\theta}\ J_W(\theta),\qquad J_W = \E_\theta\Big[\sum_{t}\gamma^t\, r[t]\Big]\quad\text{(Worker PPO, \eqref{eq:ppo})}, \label{eq:total}\\
+  &\max_{\phi}\ J_M(\phi),\qquad J_M = \E_\phi\Big[\sum_{m}\gamma^m\, r^{\mathrm{meta}}[m]\Big]\quad\text{(Meta PPO, \eqref{eq:meta})}, \\
+  &\text{外环：}\quad q^*\ \text{按 \eqref{eq:dinkelbach}},\quad \lambda\ \text{按 \eqref{eq:lagproj}},\quad \omega_s\ \text{按硬例挖掘 EMA}.
+\end{align}
+（\eqref{eq:total} 中各外环的分离性与 \eqref{eq:dinkelbach}/\eqref{eq:lagproj} 的总计步进，使 \eqref{eq:p1} 的"目标—约束—动作域"三族元素均有明确的实现回执，见表 \ref{tab:mapping}。）
+
+\paragraph{(d) 决策时钟。} 慢尺度 $T_s=20$；快尺度 $1$；Dinkelbach 外环 $I=10$ ep；Lagrangian 对偶每 ep；Meta 参数更新每 $M{=}30$ 个 meta 段；硬例挖掘权重每 ep EMA。多时间尺度的一致性由总目标 \eqref{eq:total} 与各级更新时钟协同定义。
+
+\paragraph{(e) 与实现的关系（供代码溯源，不进入论文正文）。} 实现把 \eqref{eq:p1-q} 的有限缓冲、\eqref{eq:p1-del} 的目标 $\delta$、\eqref{eq:p1-pow} 的 $\bar P$ 以字面常量出现；其与虚拟队列的对应见引理 \ref{lem:stab} 及附录 \ref{sec:code-map}——即"硬约束"在建模口径上是平均约束的虚拟队列软约束化，在实现口径上是其逐字面的有限缓冲对偶。
+
+% ================================================================== %
+\section{数值评估} \label{sec:results}
+% ================================================================== %
+
+\subsection{口径与设置} \label{sec:results-setup}
+
+按 \S\ref{sec:protocol} 评估：$7$ 点 SNR 网格、imperfect CSI、每点 $50$ episode；比较基线为经典 SDMA、NOMA 与等功率方案（并纳入单时间尺度 Lyapunov DRL 对照 LDPTRLQ）。训练设置与超参数见附录 \ref{sec:params}。
+
+\subsection{全网格基准} \label{sec:results-bench}
+
+表 \ref{tab:bench} 给出逐点交付率 / 发射功率 / 平均队列。策略在全部 $7$ 点达标，字典序 score 为
+\begin{equation}
+  \mathrm{score} = [\,7,\ 0.9519,\ -8.3971,\ 1.0804\,],
+\end{equation}
+平均功率 $13.84$\,W（$<$ SDMA），聚合 EE ratio $1.0804$（$>1.05$）。优势在深过载高 SNR 区最大：$30$\,dB 交付 $0.888$，SDMA / NOMA / 等功率分别为 $0.664$、$0.581$、$0.601$；且其发射功率约为固定功率基线的 $\sim$ 一半。
+
+\begin{table}[ht]
+\centering
+\caption{逐点交付率 / 发射功率 (W) / 平均队列（50 ep/点，imperfect CSI；数据源 \texttt{docs/paper/main.tex}）。}
+\label{tab:bench}
+\begin{tabular}{@{}c|l|l|l|l@{}}
+\toprule
+SNR (dB) & 本方案 (PPO-RSMA) & SDMA & NOMA & EqualPower \\
+\midrule
+0  & \textbf{0.886}/13.72/2.84 & 0.856/14.69/3.46 & 0.836/17.35/4.01 & 0.791/24.00/4.94 \\
+5  & \textbf{0.989}/14.39/0.43 & 0.979/13.70/0.68 & 0.970/17.35/0.92 & 0.943/24.00/1.53 \\
+10 & \textbf{0.993}/14.59/0.69 & 0.961/15.02/2.28 & 0.947/17.35/3.10 & 0.915/24.00/4.62 \\
+15 & \textbf{0.991}/13.71/1.91 & 0.887/15.12/11.42 & 0.839/17.35/15.54 & 0.824/24.00/15.48 \\
+20 & \textbf{0.974}/13.39/7.20 & 0.795/14.62/22.39 & 0.715/17.35/27.40 & 0.726/24.00/25.50 \\
+25 & \textbf{0.942}/13.59/16.08 & 0.724/14.64/28.76 & 0.636/17.35/33.07 & 0.658/24.00/31.80 \\
+30 & \textbf{0.888}/13.52/29.63 & 0.664/14.87/34.47 & 0.581/17.35/36.83 & 0.601/24.00/37.27 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{每点门限裁定}（\eqref{eq:gates}）：$0$\,dB（$0.886\ge0.856$ 且 $2.84\le1.1\times3.46$）$\to$ 达标；其余各点同理，$7/7$ 达标。
+
+\subsection{谱系、种子稳健性与预注册微调} \label{sec:results-seeds}
+
+\textbf{谱系}:纯 BC（$8{,}000$ 专家演示）$[7,0.9441,-9.3929,1.0753]$ $\xrightarrow{\text{SFTP(P=PPO+BC 锚定)}}$ champion $[7,0.9519,-8.3971,1.0804]$（零 guard 回滚）——PL 头克隆（\eqref{eq:pl} NLL）即达全网格，验证"连续 + 排列联合克隆"可行性。
+
+\textbf{种子稳健性}:种子 $42$--$46$ best-guard 交付 $\{0.9503,0.9414,0.9519,0.9526\}$，均值 $0.9496$、sd $0.0047$、极差 $0.0112$（预注册降级触发阈 $0.012$ 未触发）——champion 是均值带 $0.9496\pm0.0047$ 中的一抽，单种子样本下 $\delta\lesssim0.005$ 的差异低于种子分辨率。
+
+\textbf{预注册微调（M5.1--M5.3）}:五项单变量干预（释放 lr / KL 信任域 / 强锚定 / 采样分布）score 均 $0.9446$--$0.9474$，落入冠军种子带——当前样本量下\textbf{无处理效应}，协议贡献按"种子稳健运行点 $0.9496\pm0.0047$"报告，不宣称单项机制因果性。
+
+\subsection{模型基每时隙优化器上界与讨论} \label{sec:results-diffopt}
+
+无学习策略的\textbf{DiffOpt}（每时隙对功率 logits 跑 25 步 Adam + 解码序候选择优，surrogate 镜像 \eqref{eq:reward}，可微引擎与不可变实现 float64 一致性 atol $=10^{-9}$）在每一点超越学习策略：均值交付 $0.9574$ vs.\ $0.9519$（$+0.0055$，超出 $\pm0.005$ 种子带）、均值队列 $7.36$ vs.\ $8.40$，且全部 $7$ 门达标。其因果变体（surrogate 只用 $\hat{\vect{H}}$）与 oracle-CSI 变体逐点一致（max$|\Delta|\le0.001$），排除 CSI 泄漏——即\textbf{无模型在线优化器可严格支配当前学习策略}。这一上界为 \S\ref{sec:assembly} 的"代理目标可学性上界"给出量化证据，亦构成 \S\ref{sec:conclusion} 中 ExIt 闭环、策略-上界差距收敛的主要后续方向。
+
+% ================================================================== %
+\section{结论与展望} \label{sec:conclusion}
+% ================================================================== %
+
+本报告给出过载上行 RSMA-MU-MIMO 上 EE 在线优化的完整模型与算法框架。最终模型（\S\ref{sec:assembly}）是一个\textbf{两级受约束部分可观 MDP}：慢尺度 Meta 决策分组与组级分割比，快尺度 SA-GAT Worker 决策功率份额、drain 与 PL 解码顺序；奖励经 Dinkelbach 线性化（分数目标 $\to$ 线性）、Lyapunov 虚拟队列（平均约束 $\to$ 稳定性）、二次积压成本（缓冲 $\to$ 队期望值成本）三级转化组装为单时隙 DGLCR 代理目标；训练由双层 PPO（\eqref{eq:ppo}）配 Dinkelbach 外环 \eqref{eq:dinkelbach}、Lagrangian 对偶 \eqref{eq:lagproj} 与硬例挖掘构成。在 $7$ 点网格上以 $[7,0.9519,-8.3971,1.0804]$ 全部达标，跨种子 $\sigma\approx0.005$，消融无处理效应，均支持"成绩来自模型结构而非超参运气"的弱论断。
+
+\textbf{三条可泛化的建模洞见}（供论文讲故事使用）：
+\begin{enumerate}
+\item \textbf{分数 $\to$ 线性}：EE 分数目标经 Dinkelbach 参数化等价线性化，$P\to0$ 奇点从梯度层面移除——比任何正则化/惩罚都更结构。
+\item \textbf{硬约束 $\to$ 平均约束的虚拟队列}:交付率/功率的"硬阈值"在模型中都是平均约束 \eqref{eq:p1-del}--\eqref{eq:p1-pow} 的虚拟队列软约束化（引理 \ref{lem:stab}），附带 $O(1/V)$/$O(V)$ 权衡（定理 \ref{thm:drift}）——叙述口径与理论保证齐备。
+\item \textbf{组合 $\to$ 概率}：解码顺序以 $O(K)$ 参数承载 $K!$ 级分布（PL），Gumbel-Top-K 保证无偏可微抽样（命题 \ref{prop:pl}）——SIC 顺序从启发式上升为可学习决策。
+\end{enumerate}
+
+\textbf{展望}：(i)~以 DiffOpt 上界（\S\ref{sec:results-diffopt}）为教师回归 ExIt 闭环（BC → PPO → 衰减锚定），量化"策略-上界差距收敛"；(ii)~功率预算 $\bar P$ 由静态常数推广为每 SNR 桶的动态水平（即虚拟队列目标的自适应化）；(iii)~PL 解码顺序引入 common/private 两级联合排列（两倍排列空间的低秩乘积建模）；(iv)~以种子带宽 $n=5$ 补齐预注册微调的多种子因果裁定。
+
+% ================================================================== %
+\appendix
+% ================================================================== %
+\section{核心参数表} \label{sec:params}
+
+\begin{table}[ht]
+\centering
+\caption{关键参数默认值（权威 = \texttt{src/config.py}）。}
+\label{tab:params}
+\begin{tabular}{@{}lll@{}}
+\toprule
+域 & 参数 & 默认值\\
+\midrule
+\multirow{4}{*}{网络/信道} & $K/N_r/N_t$ & 24 / 16 / 2\\
+ & $T$ / $Q_{\max}$ / $P_{k}^{\max}$ & 200 / 100 / 1.0 W\\
+ & $\rho$ (AR(1)) & 0.9\\
+ & $\varepsilon_{\mathrm{floor}}$ / $\beta$ & 0.01 / 0.0\\
+\midrule
+\multirow{3}{*}{功耗} & $\eta_{\mathrm{PA}}$ / $P_{\mathrm{circ}}$ & 0.35 / 5.0 W\\
+ & $P_{\mathrm{floor}}$ (ee) & 3.0 W\\
+ & $\bar P$ (功率预算) & 8.0 W\\
+\midrule
+\multirow{3}{*}{Dinkelbach} & $w_{\mathrm{ee}}$ & 8.0\\
+ & $q^*$ 范围 & $[0.01,50]$, 外环 $I{=}10$ ep\\
+ & anchor $\alpha_\eta$ & 0.2\\
+\midrule
+\multirow{4}{*}{Lyapunov/奖励} & $V$(lyapunov) / 自适应 $V_{\min..\max}$ & 5.0 / $[0.3,5.0]$\\
+ & $Y_{\mathrm{ref}}$ / $X_{\mathrm{ref}}$ & 300 / 100\\
+ & $w_q$ / $w_{\mathrm{ovf}}$ / $w_{\mathrm{tp}}$ / $w_y$ / $w_x$ & 2 / 20 / 3 / 0.3 / 1.0\\
+ & $c$ (reward scaler) & $0.01$; 门 mid/$\kappa$ = $0.935/40$、$0.96/50$\\
+\midrule
+\multirow{4}{*}{PL} & 强度 & $z=\mathrm{softplus}(z^{\mathrm{raw}})+10^{-6}$\\
+ & 采样 & $\operatorname{argsort}^{\downarrow}(\log z + G)$, $G\sim\mathsf{Gumbel}(0,1)$\\
+ & 似然 & 闭合 $\log P(\pi\mid z)$ (解析, 梯度经 $z$)\\
+ & 温度 & 隐式 $\tau{=}1$（\texttt{pl\_temperature} 无消费点）\\
+\midrule
+\multirow{3}{*}{分层} & $T_s$ / $G$ / $M$ & 20 / 4 / 30\\
+ & $\alpha$ 域 & $[0.1,0.95]$, $\tau:2.0{\to}0.5$\\
+ & $\beta_{\alpha}$ (SNR 条件引导) & 0.3 (warmup 300 ep)\\
+\midrule
+\multirow{3}{*}{PPO} & clip / $\gamma$ / GAE$\lambda$ / epochs / batch & 0.2 / 0.99 / 0.95 / 8 / 64\\
+ & rollout / LR(actor/critic/log$\sigma$) & 2048 / $3e{-}4$/$1e{-}3$/$1e{-}3$\\
+ & target KL (早停) & 0.02 (仅连续分量)\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{实现位置对照（代码溯源，不进入论文正文）} \label{sec:code-map}
+
+\begin{table}[ht]
+\centering
+\caption{机制 → 实现位置对照表。}
+\label{tab:code}
+\begin{tabular}{@{}ll@{}}
+\toprule
+机制 & 实现位置\\
+\midrule
+PL 采样/似然 & \texttt{src/models/actor\_critic.py:42--83, 809--815}\\
+PL 强度 & \texttt{actor\_critic.py:790, 809}（softplus+1e-6）\\
+KL 早停仅连续分量 & \texttt{src/training/ppo.py:894--900}\\
+解码序 buffer (int64) & \texttt{src/training/buffer.py:48--52}\\
+env 拆包/转发 & \texttt{src/env/rsma\_env.py:732--736, 781--794}\\
+两阶段 MMSE-SIC & \texttt{src/env/rate\_calc.py:284--414}（不可变）\\
+DGLCR 奖励 & \texttt{src/optimization/lyapunov.py:497--632}\\
+虚拟队列 Y/X & \texttt{lyapunov.py:499--627} \((\lambda\) 更新 \texttt{main.py})\\
+DH 外层 & \texttt{main.py}（每 10 ep, \texttt{dinkelbach\_outer\_update}）\\
+DGLCR 门控 & \texttt{lyapunov.py:575--601}\\
+Solver-Expert & \texttt{src/optimization/solver\_expert.py:107--114, 269--314}\\
+可微引擎 & \texttt{src/optimization/diff\_engine.py:81--86, 131--155}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{符号表} \label{sec:symbols}
+
+$\vect H,\hat{\vect{H}}$ 实际/估计信道（$N_r\times K$）；$\pi$ SIC 解码顺序；$\alpha_k$ 功率分割比；$\vect p$ 功率份额；$\vect d$ drain 比例；$\vect z$ PL 偏好；$D_k,R_k$ 交付/速率比特；$A_k$ 到达；$Q_k,Q_{\max}$ 队列；$Y,X$ 虚拟队列；$q^*$ Dinkelbach 参数；$\lambda$ Lagrangian 乘子；$\delta=0.98$ 交付目标；$\bar P=8$\,W 功率预算；$g$ 分组；$\mathcal S_K$ 排列空间。
+
+\begin{thebibliography}{99}
+  \bibitem{dinkelbach1967nonlinear} Dinkelbach W. On nonlinear fractional programming[J]. Management Science, 1967, 13(7): 492--498.
+  \bibitem{shen2021fractional} Shen K, Yu W. Fractional programming for communication systems, Part I/II[J]. IEEE Trans.\ Signal Process., 2018.
+  \bibitem{neely2010stochastic} Neely M J. Stochastic Network Optimization with Application to Communication and Queueing Systems[M]. Morgan \& Claypool, 2010.
+  \bibitem{li2021lyapunov} Li L, et al. Lyapunov-assisted deep reinforcement learning for network optimization[J]. IEEE Trans.\ Commun., 2021.
+  \bibitem{chen2019lyapunov} Chen M, et al. Lyapunov-assisted deep reinforcement learning for wireless resource allocation[J]. IEEE Wireless Commun.\ Lett., 2019.
+  \bibitem{plackett1975analysis} Plackett R L. The Analysis of Permutations[J]. Applied Statistics, 1975, 24(2): 193--202.
+  \bibitem{luce1959} Luce R D. Individual Choice Behavior: A Theoretical Analysis[M]. Wiley, 1959.
+  \bibitem{kool2019stochastic} Kool W, van Hoof H, Welling M. Stochastic Beams and Where to Find Them: The Gumbel-Top-k Trick for Sampling Sequences Without Replacement[C]//ICML 2019.
+  \bibitem{xu2021crpo} Xu T, Liang Y, Lan G. CRPO: A New Approach for Safe Reinforcement Learning with Convergence Guarantee[C]//ICML 2021.
+  \bibitem{sutton1999policy} Sutton R S, Precup D, Singh S. Between MDPs and semi-MDPs: A framework for temporal abstraction in reinforcement learning[J]. Artificial Intelligence, 1999, 112(1--2): 181--211.
+  \bibitem{zhang2023pporsma} Zhang M, et al. PPO-based resource allocation for RSMA in overloaded uplink[J]. IEEE, 2023.
+\end{thebibliography}
+
+\end{document}

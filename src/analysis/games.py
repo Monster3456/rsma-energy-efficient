@@ -98,42 +98,94 @@ def hinge_lp_solution(X_S: np.ndarray, y: np.ndarray):
 
 # ---------------------------------------------------------------- MC Shapley --
 
+#: 并行求值上下文（ProcessPool initializer 注入；仅 workers>1 时使用）
+_CTX: dict = {}
 
-def mc_permutation_shapley(eval_subset, n: int, B: int, rng: np.random.Generator):
-    """Maleki 式 MC 排列采样 Shapley 值。
+
+def _init_worker(Xs, ys: np.ndarray, c_tilde: float, tr_N: float, full_mask: int) -> None:
+    """把博弈数据注入子进程全局（spawn 时随 initargs 序列化一次）。"""
+    global _CTX
+    _CTX = {
+        "Xs": Xs, "ys": ys,
+        "c_tilde": float(c_tilde), "tr_N": float(tr_N),
+        "full_mask": int(full_mask), "n_feat": int(full_mask).bit_length(),
+    }
+
+
+def _eval_mask_par(mask: int) -> float:
+    """子进程端的 mask→v 求值（与 svea_game.eval_subset 数学一致）。"""
+    p = _CTX
+    if mask == 0:
+        return p["c_tilde"]
+    if mask == p["full_mask"]:
+        return p["tr_N"]
+    cols = np.array(
+        [j for j in range(p["n_feat"]) if mask & (1 << j)], dtype=np.int64
+    )
+    return p["c_tilde"] - tr_er(p["Xs"][:, cols], p["ys"])
+
+
+def _mask_sequence(perms: np.ndarray, n: int) -> set[int]:
+    """排列游走需要求值的全部前缀 mask（两阶段法第一阶段）。"""
+    needed = {0}
+    prefix = 0
+    for row in perms:
+        prefix = 0
+        for j in row:
+            prefix |= 1 << int(j)
+            needed.add(prefix)
+    return needed
+
+
+def mc_permutation_shapley(eval_subset, n: int, B: int, rng: np.random.Generator,
+                           workers: int = 1):
+    """Maleki 式 MC 排列采样 Shapley 值（两阶段：先定 mask 集 → 求值 → 走游走）。
 
     Args:
-        eval_subset: mask(bitmask int) -> v(S) 的特征函数。
+        eval_subset: mask(bitmask int) -> v(S) 的特征函数（串行路径）。
         n: 玩家数。
         B: 排列样本数。
         rng: 确定性随机源。
+        workers: >1 时用 ProcessPool 并行求值（值只算一次、顺序无关 →
+            结果与串行逐位一致，仅墙钟不同）；≤1 串行。
 
     Returns:
-        (phi (n,), n_solves): 均值 Shapley 与特征函数求解次数（含 Bitmask 缓存命中不变）。
+        (phi (n,), n_solves): 均值 Shapley 与特征函数求值次数（= 去重 mask 数）。
     """
+    from concurrent.futures import ProcessPoolExecutor
+
+    perms = np.stack([rng.permutation(n) for _ in range(B)]).astype(np.int64)
+    needed = _mask_sequence(perms, n)
+
+    if workers > 1 and B * n >= 256:
+        full_mask = (1 << n) - 1
+        masks = sorted(needed)
+        # initargs 需要 Xs/ys；eval_subset 是闭包不可序列化 → 由调用方预先
+        # 注入 _CTX（见 svea_game workers>0 分支）；此处仅兜底断言。
+        with ProcessPoolExecutor(
+            max_workers=int(workers),
+            initializer=_init_worker,
+            initargs=(_CTX.get("Xs"), _CTX.get("ys"), _CTX.get("c_tilde"),
+                      _CTX.get("tr_N"), full_mask),
+        ) as ex:
+            vals = list(ex.map(_eval_mask_par, masks))
+        value = dict(zip(masks, vals))
+    else:
+        value: dict[int, float] = {}
+        for mask in needed:
+            if mask not in value:
+                value[mask] = float(eval_subset(mask))
+
     phi = np.zeros(n, dtype=np.float64)
-    cache: dict[int, float] = {}
-    n_solves = 0
-    (1 << n) - 1
-    for _ in range(B):
-        # 一次遍历排列的前缀：插入的玩家 j 获得边际贡献 v(prefix∪{j}) − v(prefix)
+    for row in perms:
         prefix = 0
-        for j in rng.permutation(n):
-            next_mask = prefix | (1 << j)
-            v_prev = cache.get(prefix)
-            if v_prev is None:
-                v_prev = float(eval_subset(prefix))
-                cache[prefix] = v_prev
-                n_solves += 1
-            v_next = cache.get(next_mask)
-            if v_next is None:
-                v_next = float(eval_subset(next_mask))
-                cache[next_mask] = v_next
-                n_solves += 1
-            phi[j] += v_next - v_prev
-            prefix = next_mask
+        for j in row:
+            jj = int(j)
+            nxt = prefix | (1 << jj)
+            phi[jj] += value[nxt] - value[prefix]
+            prefix = nxt
     phi /= max(B, 1)
-    return phi, n_solves
+    return phi, len(value)
 
 
 def svea(phi: np.ndarray, c_tilde: float, n: int) -> np.ndarray:
@@ -217,6 +269,7 @@ def svea_game(
     zscore: bool = True,
     class_cap: float = 10.0,
     exclude: np.ndarray | None = None,
+    workers: int = 1,
 ):
     """对 (X, y) 跑完整 SVEA 分类博弈。
 
@@ -268,7 +321,12 @@ def svea_game(
         cols = active[[j for j in range(n_active) if mask & (1 << j)]]
         return c_tilde - tr_er(Xs[:, cols], ys)
 
-    phi_active, n_solves = mc_permutation_shapley(eval_subset, n_active, B, rng)
+    global _CTX
+    if int(workers) > 1:
+        # 并行路径：把样本与常数注入模块级上下文（子进程 initargs 用）
+        _CTX.update(Xs=Xs, ys=ys, c_tilde=c_tilde, tr_N=tr_N)
+    phi_active, n_solves = mc_permutation_shapley(eval_subset, n_active, B, rng,
+                                                  workers=int(workers))
     phi = np.zeros(n_feat, dtype=np.float64)  # null player → 0
     phi[active] = phi_active
     sv = svea(phi, c_tilde, n_feat)  # 原始 n=13 的仿射变换

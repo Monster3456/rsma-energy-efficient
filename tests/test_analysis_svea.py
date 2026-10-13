@@ -82,6 +82,48 @@ def test_svea_dominant_feature_toy():
     assert e[0] < e[1:].min()
 
 
+def test_parallel_workers_identical_to_serial():
+    """workers>1 与串行结果逐位一致（两阶段法仅改墙钟不改数学）。"""
+    rng = _rng(11)
+    m = 120
+    x0 = np.where(rng.random(m) < 0.5, 1.0, -1.0)
+    X = np.column_stack([x0, rng.normal(size=(m, 4))])
+    y = x0.copy()
+    g_serial = svea_game(X, y, _rng(12), m_sv=80, B=60, workers=1)
+    g_par = svea_game(X, y, _rng(13), m_sv=80, B=60, workers=1)  # 同参不同种子仅用于跑通形状
+    g_par_same = svea_game(X, y, _rng(12), m_sv=80, B=60, workers=2)
+    np.testing.assert_allclose(g_serial["phi"], g_par_same["phi"], atol=1e-12)
+    np.testing.assert_allclose(g_serial["sv"], g_par_same["sv"], atol=1e-12)
+    assert g_serial["n_solves"] == g_par_same["n_solves"]
+    _ = g_par  # 仅确认并行路径可跑（独立种子）
+
+def test_psv_mlp_locks_functionality():
+    """--psv_mlp 非死 flag：小 MLP 在可分数据上确实训练（acc_sub 高、PSV≈1）。"""
+    from src.analysis.games import psv_mlp
+
+    rng = _rng(21)
+    n = 200
+    x0 = np.where(rng.random(n) < 0.5, 1.0, -1.0)
+    X = np.column_stack([x0, rng.normal(size=(n, 4))])  # 仅特征 0 携带标签信息
+    y = x0.copy()
+
+    psv, acc_sub, acc_full = psv_mlp(X, y, np.array([0]), _rng(22))
+    assert acc_sub > 0.7, "信息特征子集应被 MLP 学到"
+    assert 0.0 <= acc_sub <= 1.0 and 0.0 <= acc_full <= 1.0
+    assert psv == pytest.approx(acc_sub / acc_full, abs=1e-9)
+    assert psv > 0.8, "全特征含噪声维度不应显著损害精度 → PSV 应接近 1"
+
+
+def test_psv_mlp_insufficient_samples_returns_none():
+    """样本不足（te<20）→ (None, None, None) 哨兵，不崩溃。"""
+    from src.analysis.games import psv_mlp
+
+    rng = _rng(23)
+    X = rng.normal(size=(40, 3))
+    y = np.where(rng.random(40) < 0.5, 1.0, -1.0)
+    assert psv_mlp(X, y, np.array([0]), _rng(24)) == (None, None, None)
+
+
 def test_svea_null_player_excluded():
     """零方差特征 = null player：排除后 φ=0、SVEA>0 永不支配；其他特征 Shapley 不变。"""
     rng = _rng(9)

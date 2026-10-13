@@ -95,6 +95,8 @@ def parse_args(argv=None):
     p.add_argument("--label", default="served", choices=["served", "queue_growth"])
     p.add_argument("--m_sv", type=int, default=1000)
     p.add_argument("--B_sv", type=int, default=200)
+    p.add_argument("--sv_workers", type=int, default=8,
+                   help="SVEA 主博弈 LP 并行进程数（效果等价、仅墙钟不同；CI 组内保持串行）")
     p.add_argument("--ci_groups", type=int, default=30, help="t-CI 分组数（0=跳过 CI）")
     p.add_argument("--ci_B", type=int, default=15, help="每组 CI 的排列样本数")
     p.add_argument("--m_ci", type=int, default=40, help="每组 CI 的子采样样本数")
@@ -327,7 +329,7 @@ def _run_svea(args, dataset, layout, snr_list):
         const_feats = constant_feature_cols(Xz)
         rng = np.random.default_rng(args.seed * 1000 + snr)
         game = svea_game(Xz, y, rng, m_sv=args.m_sv, B=args.B_sv,
-                         zscore=False, exclude=const_feats)
+                         zscore=False, exclude=const_feats, workers=args.sv_workers)
         ci95 = _ci_estimate(Xz, y, layout, args, snr, rng, exclude=const_feats) if args.ci_groups > 0 else None
         psv, acc_sub, acc_full = psv_linear(X, y, game["sv_neg"], rng, exclude=const_feats)
         entry = {

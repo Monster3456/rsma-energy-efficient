@@ -47,7 +47,8 @@ DEFAULT_FEATURES = "h_gains,queue,power"
 
 def make_temporal_config_cls(window: int, features: tuple, power_free: bool = False,
                              n_r: int | None = None, fixed_lambda: float | None = None,
-                             prune_constants: bool = False):
+                             prune_constants: bool = False, meta_zeta: bool = False,
+                             n_groups: int | None = None):
     """构造打补丁的 Config 子类。
 
     子配置（SystemConfig/PPOConfig 等）是 dataclass，实例化后在实例上
@@ -85,6 +86,11 @@ def make_temporal_config_cls(window: int, features: tuple, power_free: bool = Fa
             self.system.obs_history_features = tuple(features)
             self.system.obs_prune_constant_blocks = bool(prune_constants)
             self.ppo.worker_d_user = int(d_user_eff)
+            # Arm C: 目标条件化检查点多一维 ζ_norm 全局观测（obs_dim = K*d_user + 4）
+            if meta_zeta:
+                self.hierarchical.meta_zeta_enabled = True
+            if n_groups is not None:
+                self.hierarchical.n_groups = int(n_groups)
             if power_free:
                 self.system.use_softmax_power_share = False
             if n_r is not None:
@@ -214,6 +220,17 @@ def main():
         ),
     )
     parser.add_argument(
+        "--n-groups",
+        type=int,
+        default=None,
+        help="Meta 分组数 G（训练用了 --n_groups 的检查点必须配套，否则 Meta 头形状不匹配）",
+    )
+    parser.add_argument(
+        "--meta-zeta",
+        action="store_true",
+        help="Arm C 目标条件化检查点：评估环境同步开启 meta_zeta_enabled（obs_dim +1，多 ζ_norm 全局维）",
+    )
+    parser.add_argument(
         "--obs-prune-constant-blocks",
         action="store_true",
         help="训练用了 --obs_prune_constant_blocks 的检查点须加此 flag（A-prune：评估环境同步移除观测常数块，worker_d_user 相应 -3）",
@@ -237,6 +254,8 @@ def main():
         n_r=wrapper_args.n_r,
         fixed_lambda=wrapper_args.fixed_lambda,
         prune_constants=wrapper_args.obs_prune_constant_blocks,
+        meta_zeta=wrapper_args.meta_zeta,
+        n_groups=wrapper_args.n_groups,
     )
     base_d_user = d_user_eff - wrapper_args.obs_history_window * len(features)
     print(

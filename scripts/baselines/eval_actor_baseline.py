@@ -67,12 +67,22 @@ def main(argv=None) -> int:
           f"(obs={obs_dim}, act={action_dim}, K={K})", flush=True)
     print("| SNR(dB) | Deliv | Q | P(W) | Rsum | Ovf |")
     print("|---:|---:|---:|---:|---:|---:|")
+    # A-prune 转正后 build_config_for_snr 默认剪枝（obs 243），而 TD3/DDPG/DR-SAC
+    # 等旧检查点是未剪口径（obs 315）。按 d_user 反推剪枝开关，否则 _split_obs 会崩。
+    prune = bool(args.d_user == 10)
     tot_deliv = []
     for snr_db, sigma2 in SNR_POINTS:
         if snr_db not in want:
             continue
         cfg = build_config_for_snr(sigma2, args.csi_mode)
+        cfg.system.obs_prune_constant_blocks = prune
+        cfg.ppo.worker_d_user = int(args.d_user)
         env = RSMAEnergyEnv(cfg)
+        if env.obs_dim != obs_dim:
+            raise SystemExit(
+                f"obs_dim 不匹配：env={env.obs_dim} vs ckpt={obs_dim}。"
+                f"试 --d_user {10 if prune else 13}（A-prune 剪枝口径 10，未剪口径 13）。"
+            )
 
         def action_fn(obs, env, _p=policy):
             o = torch.as_tensor(obs[None, :], dtype=torch.float32)

@@ -52,7 +52,7 @@ from src.analysis.features import (
     ref_zero,
     resolve_layout,
 )
-from src.analysis.games import psv_linear, svea_game, t_ci
+from src.analysis.games import left_of_origin, mean_subgame_e, psv_linear, svea_game, t_ci
 from src.analysis.kernel_shap import kernel_shap_blocks, kernel_shap_channels
 from src.analysis.models import (
     assert_softmax_power_share,
@@ -97,9 +97,11 @@ def parse_args(argv=None):
     p.add_argument("--B_sv", type=int, default=200)
     p.add_argument("--sv_workers", type=int, default=8,
                    help="SVEA 主博弈 LP 并行进程数（效果等价、仅墙钟不同；CI 组内保持串行）")
-    p.add_argument("--ci_groups", type=int, default=30, help="t-CI 分组数（0=跳过 CI）")
-    p.add_argument("--ci_B", type=int, default=15, help="每组 CI 的排列样本数")
-    p.add_argument("--m_ci", type=int, default=40, help="每组 CI 的子采样样本数")
+    p.add_argument("--ci_groups", type=int, default=30, help="t-CI 分组数 G（0=跳过 CI）")
+    p.add_argument("--ci_sub_per_group", type=int, default=30,
+                   help="Tripathi §3.2：每组子样本数 M（组内 M 个子博弈取均值，默认 30=原文）")
+    p.add_argument("--ci_B", type=int, default=15, help="单个子博弈的排列样本数")
+    p.add_argument("--m_ci", type=int, default=40, help="单个子博弈的目标样本数")
     p.add_argument("--psv_mlp", action="store_true", help="同时跑非线性 PSV（torch 小 MLP，默认关）")
     # KernelSHAP / EG
     p.add_argument("--n_pairs", type=int, default=512, help="KernelSHAP 互补联盟对数")
@@ -331,7 +333,11 @@ def _run_svea(args, dataset, layout, snr_list):
         game = svea_game(Xz, y, rng, m_sv=args.m_sv, B=args.B_sv,
                          zscore=False, exclude=const_feats, workers=args.sv_workers)
         ci95 = _ci_estimate(Xz, y, layout, args, snr, rng, exclude=const_feats) if args.ci_groups > 0 else None
-        psv, acc_sub, acc_full = psv_linear(X, y, game["sv_neg"], rng, exclude=const_feats)
+        # PSV 用独立随机源：CI 消耗的随机量随 G/M 变化，若共用 rng 会让测集划分
+        # （乃至 PSV）随 CI 参数漂移。
+        psv, acc_sub, acc_full = psv_linear(
+            X, y, game["sv_neg"], np.random.default_rng(args.seed * 1000 + snr + 7), exclude=const_feats
+        )
         entry = {
             "c_tilde": game["c_tilde"],
             "tr_er_N": game["tr_er_N"],
@@ -341,8 +347,12 @@ def _run_svea(args, dataset, layout, snr_list):
             "ci95": None
             if ci95 is None
             else {
+                "mean": [round(float(v), 6) for v in ci95[0]],
                 "lo": [round(float(v), 6) for v in ci95[1]],
                 "hi": [round(float(v), 6) for v in ci95[2]],
+                "left_of_origin": [bool(b) for b in ci95[3]],
+                "G": int(ci95[4]["G"]),
+                "M": int(ci95[4]["M"]),
             },
             "psv_linear": _r4(psv),
             "acc_subset": _r4(acc_sub),
@@ -356,8 +366,13 @@ def _run_svea(args, dataset, layout, snr_list):
             entry["acc_mlp_subset"] = _r4(acc_mlp_sub)
             entry["acc_mlp_full"] = _r4(acc_mlp_full)
         out[str(snr)] = entry
+        ci_note = ""
+        if entry["ci95"] is not None:
+            left = [j for j, b in enumerate(entry["ci95"]["left_of_origin"]) if b]
+            ci_note = (f"  CI_left_of_origin={left}"
+                       f" (G={entry['ci95']['G']}×M={entry['ci95']['M']})")
         print(f"  SNR {snr:>2}: SVEA_neg={out[str(snr)]['sv_neg']}  "
-              f"PSV={out[str(snr)]['psv_linear']}  excluded={list(const_feats)}", flush=True)
+              f"PSV={out[str(snr)]['psv_linear']}  excluded={list(const_feats)}{ci_note}", flush=True)
     out["feature_names"] = list(NATIVE_FEATURE_NAMES)
     out["mean_field_channels"] = list(MEAN_FIELD_BASELINE_CHANNELS)
     return out
@@ -368,22 +383,35 @@ def _r4(v):
 
 
 def _ci_estimate(X, y, layout, args, snr, rng, exclude=None):
-    """分组 t-CI：时隙分 G 组，每组小样本重跑分类博弈（文献 1 §3.2）。
+    """Tripathi et al. (2020) §3.2 区间估计。
 
-    exclude 与主博弈一致（同一 null-player 集合），保证各组 e 向量同一特征空间。
+    原文三步：子样本划分 → **每组 M=30 个子样本求组均值 e_j^g**（CLT 用）→ 对 G 个
+    组均值做 t_{G−1} 区间；显著性判据 = 区间整体落在原点左侧（``left_of_origin``）。
+
+    实现口径：
+    - **组间**沿时隙轴不相交划分（同一时隙的 K 个用户同组，保持信道态独立）；
+    - **组内** :func:`games.mean_subgame_e` 跑 M 个独立子博弈取均值（原文的抗噪关键）；
+    - exclude 与主博弈一致（同一 null-player 集合），各组 e 向量同一特征空间。
+    - 类不平衡适配见 ``mean_subgame_e`` docstring（少数类不足以支撑严格不相交划分）。
     """
     n_slots = X.shape[0] // layout.K
     g = max(1, n_slots // args.ci_groups)
     G = max(1, n_slots // g)
+    M = max(1, int(args.ci_sub_per_group))
     e_rows = []
     for gi in range(G):
         slot0, slot1 = gi * g, min(n_slots, (gi + 1) * g)
         idx = np.arange(slot0 * layout.K, slot1 * layout.K)
         rng2 = np.random.default_rng(args.seed * 1000 + snr * 100 + gi)
-        game = svea_game(X[idx], y[idx], rng2, m_sv=args.m_ci, B=args.ci_B,
-                         zscore=False, exclude=exclude)
-        e_rows.append(game["sv"])
-    return t_ci(np.stack(e_rows))
+        e_rows.append(
+            mean_subgame_e(
+                X[idx], y[idx], rng2,
+                n_sub=M, m_sv=args.m_ci, B=args.ci_B,
+                exclude=exclude, zscore=False,
+            )
+        )
+    mean, lo, hi = t_ci(np.stack(e_rows))
+    return mean, lo, hi, left_of_origin(lo, hi), {"G": G, "M": M}
 
 
 # ---------------------------------------------------------------- 局部归因 ----
@@ -528,9 +556,11 @@ def _fig_svea_intervals(args, svea, snr_list):
         e = np.array(d["sv"])
         lo = np.array(d["ci95"]["lo"]) if d.get("ci95") else e
         hi = np.array(d["ci95"]["hi"]) if d.get("ci95") else e
+        # 误差棒须画成到点估计的上下半宽（旧版误用全区间宽度 hi−lo，误差棒被放大一倍）
+        yerr = np.vstack([np.clip(e - lo, 0.0, None), np.clip(hi - e, 0.0, None)])
         colors = ["#d62728" if j in d["sv_neg"] else "#1f77b4" for j in range(len(names))]
         ax.bar(
-            range(len(names)), e, yerr=np.abs(hi - lo), color=colors, capsize=2, error_kw={"lw": 1, "ecolor": "#7f7f7f"}
+            range(len(names)), e, yerr=yerr, color=colors, capsize=2, error_kw={"lw": 1, "ecolor": "#7f7f7f"}
         )
         ax.axhline(0.0, color="k", lw=0.6)
         ax.set_xticks(range(len(names)))

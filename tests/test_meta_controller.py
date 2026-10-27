@@ -24,6 +24,7 @@ class TestMetaActorCritic:
         self.d_user = 7
         self.n_groups = 4
         self.model = MetaActorCritic(
+            zeta_enabled=True,
             K=self.K, d_user=self.d_user, n_groups=self.n_groups
         )
 

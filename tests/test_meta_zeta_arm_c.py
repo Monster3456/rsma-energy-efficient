@@ -33,7 +33,7 @@ def _cfg(zeta: bool) -> Config:
 
 def _meta() -> MetaActorCritic:
     return MetaActorCritic(K=24, d_user=12, hidden_dim=32, n_heads=2,
-                           n_groups=4, group_level_alpha=True)
+                           n_groups=4, group_level_alpha=True, zeta_enabled=True)
 
 
 def test_meta_emits_zeta_in_range():

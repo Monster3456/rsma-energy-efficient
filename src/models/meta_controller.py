@@ -39,7 +39,7 @@ class MetaActorCritic(nn.Module):
     """
     
     def __init__(self, K: int, d_user: int = 6, hidden_dim: int = 64,
-                 n_heads: int = 4, n_groups: int = 4,
+                 n_heads: int = 4, n_groups: int = 4, zeta_enabled: bool = False,
                  group_tau_init: float = 2.0, group_tau_min: float = 0.5,
                  balance_coef: float = 0.1,
                  group_level_alpha: bool = False,
@@ -122,25 +122,43 @@ class MetaActorCritic(nn.Module):
         # Group Actor head: 每用户输出 G 个 logit → Categorical
         self.group_head = nn.Linear(hidden_dim, n_groups)  # (hidden_dim → G)
 
-        # Arm C：慢尺度交付目标 ζ（去分组、留分层）。sigmoid 仿射映射到 [zeta_min, zeta_max]，
-        # 通过 self.last_zeta 暴露（不改 act 返回签名，保持向后兼容）。
-        self.zeta_enabled = bool(getattr(self, 'zeta_enabled', True))
+        # Arm C：慢尺度交付目标 ζ。sigmoid 仿射映射到 [zeta_min, zeta_max]，经
+        # self.last_zeta 暴露（不改 act 返回签名，保持向后兼容）。**zeta_head 恒建**
+        # 以保持模块形状稳定；
+        # 旧检查点缺该键、新检查点多该键，均由 load_state_dict 的重写统一兼容。
+        self.zeta_enabled = bool(zeta_enabled)
         self.zeta_min = 0.5
         self.zeta_max = 1.0
         self.zeta_head = nn.Linear(hidden_dim, 1)
         nn.init.zeros_(self.zeta_head.weight)
         nn.init.constant_(self.zeta_head.bias, -2.0)   # 初始 sigmoid≈0.12 → ζ≈0.56
         self.last_zeta = None
-        
+
         # Critic head: 全局状态价值
         self.critic_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1),
         )
-        
+
         self._init_weights()
-    
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        """容错加载：zeta_head 键缺失/多余时自动补齐。
+
+        旧检查点（无 zeta_head，如冠军/armA/armB）与新检查点（含 zeta_head，
+        armC）都可加载；其余键仍走 strict 语义，真正的形状错误不被掩盖。
+        """
+        sd = dict(state_dict)
+        zeta_keys = ("zeta_head.weight", "zeta_head.bias")
+        have = [k for k in zeta_keys if k in sd]
+        if len(have) == 0:
+            sd["zeta_head.weight"] = torch.zeros_like(self.zeta_head.weight)
+            sd["zeta_head.bias"] = torch.full_like(self.zeta_head.bias, -2.0)
+        elif len(have) == 1:
+            raise RuntimeError(f"zeta_head 键不完整: {have}")
+        return super().load_state_dict(sd, strict=strict)
+
     def _init_weights(self):
         """正交初始化"""
         for m in self.modules():
@@ -203,9 +221,8 @@ class MetaActorCritic(nn.Module):
         pooled = x.mean(dim=1)  # (batch, hidden)
         value = self.critic_head(pooled)  # (batch, 1)
         
-        # Arm C：慢尺度交付目标 ζ
-        zeta_raw = self.zeta_head(pooled)  # (batch, 1)
-        self._zeta_raw = zeta_raw
+        # Arm C：慢尺度交付目标 ζ（仅 zeta_enabled 时计算）
+        self._zeta_raw = self.zeta_head(pooled) if self.zeta_enabled else None
         return split_or_alpha, group_logits, value
     
     def _map_alpha(self, raw_alpha: torch.Tensor) -> torch.Tensor:
@@ -253,7 +270,7 @@ class MetaActorCritic(nn.Module):
 
         split_or_alpha, group_logits, value = self.forward(user_features)
         # Arm C：慢尺度交付目标 ζ（sigmoid 仿射映射），供 env 设定 DVQ 目标与条件观测
-        if getattr(self, "_zeta_raw", None) is not None:
+        if self.zeta_enabled and getattr(self, "_zeta_raw", None) is not None:
             zr = self._zeta_raw.reshape(-1)[0].detach()
             self.last_zeta = float(self.zeta_min + (self.zeta_max - self.zeta_min) * torch.sigmoid(zr))
         group_logits = group_logits.squeeze(0)  # (K, G)

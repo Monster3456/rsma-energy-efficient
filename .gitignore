@@ -35,3 +35,30 @@ cloud-agents-console/
 # LaTeX/build 瞬态（重生成即得）
 docs/paper/*.aux
 docs/paper/*.log
+
+# LaTeX 构建产物（源码入库、产物不入）
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.idx
+*.ind
+*.ilg
+*.glo
+*.gls
+*.glg
+*.acn
+*.acr
+*.alg
+*.bcf
+*.brf
+*.run.xml
+*.thm
+*.loe

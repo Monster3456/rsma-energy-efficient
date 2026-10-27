@@ -148,7 +148,11 @@ class TestMetaActorCritic:
         """梯度能回传到所有参数"""
         x = torch.randn(2, self.K, self.d_user, requires_grad=False)
         split_logits, group_logits, value = self.model(x)
+        # Arm C 新增 zeta_head（forward 内暂存于 _zeta_raw）；纳入 loss 才能验证其梯度
+        zeta_raw = getattr(self.model, "_zeta_raw", None)
         loss = split_logits.sum() + group_logits.sum() + value.sum()
+        if zeta_raw is not None:
+            loss = loss + zeta_raw.sum()
         loss.backward()
         for name, p in self.model.named_parameters():
             assert p.grad is not None, f"No grad for {name}"

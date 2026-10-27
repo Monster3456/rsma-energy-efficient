@@ -12,13 +12,12 @@ Task#38 Group-level α 架构:
 
 决策周期: 每 T_s 个时隙执行一次。
 """
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions import Bernoulli, Categorical, Normal
+
 import numpy as np
-from dataclasses import dataclass
-from typing import Optional, Tuple, Dict
+import torch
+import torch.nn.functional as F
+from torch import nn
+from torch.distributions import Bernoulli, Categorical, Normal
 
 
 class MetaActorCritic(nn.Module):
@@ -122,6 +121,16 @@ class MetaActorCritic(nn.Module):
         
         # Group Actor head: 每用户输出 G 个 logit → Categorical
         self.group_head = nn.Linear(hidden_dim, n_groups)  # (hidden_dim → G)
+
+        # Arm C：慢尺度交付目标 ζ（去分组、留分层）。sigmoid 仿射映射到 [zeta_min, zeta_max]，
+        # 通过 self.last_zeta 暴露（不改 act 返回签名，保持向后兼容）。
+        self.zeta_enabled = bool(getattr(self, 'zeta_enabled', True))
+        self.zeta_min = 0.5
+        self.zeta_max = 1.0
+        self.zeta_head = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.zeta_head.weight)
+        nn.init.constant_(self.zeta_head.bias, -2.0)   # 初始 sigmoid≈0.12 → ζ≈0.56
+        self.last_zeta = None
         
         # Critic head: 全局状态价值
         self.critic_head = nn.Sequential(
@@ -153,7 +162,7 @@ class MetaActorCritic(nn.Module):
         self.group_tau = max(self.group_tau_min, self.group_tau_init * (1.0 - p))
         return self.group_tau
     
-    def forward(self, user_features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, user_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """前向传播。
         
         Args:
@@ -194,6 +203,9 @@ class MetaActorCritic(nn.Module):
         pooled = x.mean(dim=1)  # (batch, hidden)
         value = self.critic_head(pooled)  # (batch, 1)
         
+        # Arm C：慢尺度交付目标 ζ
+        zeta_raw = self.zeta_head(pooled)  # (batch, 1)
+        self._zeta_raw = zeta_raw
         return split_or_alpha, group_logits, value
     
     def _map_alpha(self, raw_alpha: torch.Tensor) -> torch.Tensor:
@@ -216,7 +228,7 @@ class MetaActorCritic(nn.Module):
         return torch.gather(group_alphas, dim=-1, index=group_ids.long())
 
     def act(self, user_features: torch.Tensor, deterministic: bool = False
-            ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """采样动作（split/α + group）。
 
         Args:
@@ -240,6 +252,10 @@ class MetaActorCritic(nn.Module):
             user_features = user_features.unsqueeze(0)  # (1, K, d_user)
 
         split_or_alpha, group_logits, value = self.forward(user_features)
+        # Arm C：慢尺度交付目标 ζ（sigmoid 仿射映射），供 env 设定 DVQ 目标与条件观测
+        if getattr(self, "_zeta_raw", None) is not None:
+            zr = self._zeta_raw.reshape(-1)[0].detach()
+            self.last_zeta = float(self.zeta_min + (self.zeta_max - self.zeta_min) * torch.sigmoid(zr))
         group_logits = group_logits.squeeze(0)  # (K, G)
         value = value.squeeze()  # scalar
 
@@ -282,8 +298,8 @@ class MetaActorCritic(nn.Module):
     
     def evaluate_actions(self, user_features: torch.Tensor,
                          split_actions: torch.Tensor,
-                         group_actions: Optional[torch.Tensor] = None
-                         ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                         group_actions: torch.Tensor | None = None
+                         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """评估已有动作的 log_prob, value, entropy (用于 PPO 更新)。
 
         Args:
@@ -374,7 +390,7 @@ class MetaRolloutBuffer:
     
     def store(self, user_features: np.ndarray, action: np.ndarray,
               log_prob: float, reward: float, value: float, done: bool = False,
-              group_action: Optional[np.ndarray] = None):
+              group_action: np.ndarray | None = None):
         """存储一个 meta transition。"""
         self.user_features.append(user_features)
         self.actions.append(action)
@@ -484,7 +500,7 @@ class MetaPPOTrainer:
         self.max_grad_norm = config.meta_max_grad_norm
         self.batch_size = max(16, config.meta_update_threshold // 4)
     
-    def update(self, buffer: MetaRolloutBuffer, last_value: float = 0.0) -> Dict:
+    def update(self, buffer: MetaRolloutBuffer, last_value: float = 0.0) -> dict:
         """执行 Meta PPO 更新。
         
         Args:
@@ -558,4 +574,4 @@ class MetaPPOTrainer:
         }
 
 
-__all__ = ["MetaActorCritic", "MetaRolloutBuffer", "MetaPPOTrainer"]
+__all__ = ["MetaActorCritic", "MetaPPOTrainer", "MetaRolloutBuffer"]

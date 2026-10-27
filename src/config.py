@@ -1,6 +1,5 @@
 """系统配置：队列稳定上行MIMO-RSMA长期能效最大化"""
 from dataclasses import dataclass, field
-import numpy as np
 
 # 时序历史窗口快照允许的逐用户特征名（语义映射见 rsma_env._get_observation）：
 # "h_gains"→h_gains_norm 块, "queue"→queue_norm 块, "power"→power_history 块
@@ -464,6 +463,12 @@ class PPOConfig:
     # fix_drain: d 块恒为 1.0 不学习；fix_order: 解码序恒为 gain-desc 不学习。
     worker_fix_drain: bool = False
     worker_fix_order: bool = False
+    # Arm A（10-23-hierarchical-opt）：精简动作模式。
+    # True 时 Worker 输出只含 (p_logits, z_scores) 两块，动作 4K→2K；
+    # α 由 Meta 的 split_mask 给出（本就覆盖 Worker α），d_k≡1（等效 fix_drain）。
+    # 可解释性依据：Worker α 块 σ≈3e-5（死维）、排空 d_k σ≈1.3e-5（饱和于 1）。
+    # 默认 False = 官方口径零变化；旧检查点走旧路径不受影响。
+    worker_simplified_action: bool = False
     worker_attn_layers: int = 2        # attention 层数
 
     # Mean-Field MAPPO (MVP)
@@ -621,6 +626,15 @@ class HierarchicalConfig:
 
     # Meta reward 缩放（防止 meta value loss 爆炸；原始 reward 量级 ±50 → ±1）
     meta_reward_scale: float = 0.02
+    # Arm B：分组结构项（多样性/均衡）的独立缩放。原先与主项一起乘 meta_reward_scale
+    # (=0.02)，结构项有效幅动仅 0.015，是 |MetaR|≈19 的 0.08%，被主项完全淹没。
+    # 5.0 使"恒单组→4 组均衡"的摆动达 0.75×5=3.75，约占 scaled 主项量级的 20%。
+    meta_structure_scale: float = 5.0
+    # Arm C：目标条件化。True 时 Meta 输出慢尺度交付目标 ζ，env 将 ζ_norm 作为
+    # 额外全局观测维注入 Worker，并把 ζ 作为交付虚拟队列的目标值。
+    meta_zeta_enabled: bool = False
+    zeta_min: float = 0.5
+    zeta_max: float = 1.0
 
     # Task#36: SNR 条件 α 引导奖励
     # 在 Meta reward 中加入 -alpha_guidance_scale * (alpha_mean - target_alpha)**2 软引导项，

@@ -289,6 +289,9 @@ def _meta_decide(meta_ac: MetaActorCritic, env: RSMAEnergyEnv, device: torch.dev
         # primary = per-user α (K,) (已映射到 [α_min, α_max])
         env.set_split_mask(primary_np)  # 覆盖为连续 α
         env.set_group_ids(group_ids_np)
+        # Arm C: 慢尺度交付目标 ζ → env（写观测 + 改 DVQ 目标）
+        if getattr(meta_ac, 'last_zeta', None) is not None:
+            env.set_delivery_target(meta_ac.last_zeta)
         # Buffer 存储原始采样 (n_groups,)，供 PPO log_prob 重计算
         action_for_buffer = meta_ac.last_raw_alpha.detach().cpu().numpy().astype(np.float32)
     else:
@@ -478,7 +481,8 @@ def _solver_expert_collect(env: RSMAEnergyEnv, config, meta_ac, device,
     K = env.K
     T_s = int(getattr(config.hierarchical, "T_s", 20))
     max_steps_per_ep = int(getattr(config.system, "T", 200))
-    expert = SolverExpert(env, n_steps=n_steps, lr=lr)
+    expert = SolverExpert(env, n_steps=n_steps, lr=lr,
+                          simplified_action=bool(getattr(config.ppo, "worker_simplified_action", False)))
     expert_obs: list = []
     expert_act: list = []
     expert_orders: list = []
@@ -704,8 +708,10 @@ def train(config=None):
 
     # ----------------------------- Worker ----------------------------- #
     K = config.system.K
-    continuous_dim = 3 * K    # alpha, p_total, d_ratio
-    worker_action_dim = 4 * K  # 3K连续 + K解码顺序
+    simplified_action = bool(getattr(config.ppo, "worker_simplified_action", False))
+    # Arm A 精简动作：只学 (p_total, z_scores)，α 由 Meta 给、d_k≡1 → 动作 4K→2K
+    continuous_dim = 1 * K if simplified_action else 3 * K
+    worker_action_dim = continuous_dim + K  # 连续块 + K 解码顺序
 
     use_attention = bool(getattr(config.ppo, "use_attention", False))
     c3po_enabled = bool(
@@ -756,6 +762,7 @@ def train(config=None):
             use_c3po_cost_head=c3po_enabled,
             c3po_n_points=getattr(config.constraint, "c3po_n_points", 7) if c3po_enabled else 7,
             backpressure_beta=getattr(config.ppo, "backpressure_beta", 0.0),
+            simplified_action=simplified_action,
             backpressure_mode=getattr(config.ppo, "backpressure_mode", "queue"),
             fix_drain=getattr(config.ppo, "worker_fix_drain", False),
             fix_order=getattr(config.ppo, "worker_fix_order", False),
@@ -1645,7 +1652,7 @@ def train(config=None):
         print(f"[Guard] enabled: every={config.ppo.eval_guard_every}ep "
               f"points={guard_points} n_eps={config.ppo.eval_guard_episodes} "
               f"v2={config.ppo.eval_guard_v2} "
-              f"ref={g_ref_avg:.3f}−{config.ppo.eval_guard_margin} "
+              f"ref={g_ref_avg:.3f}-{config.ppo.eval_guard_margin} "
               f"q_ref={g_q_ref:.2f}×{config.ppo.eval_guard_queue_ratio} "
               f"lr_groups={guard_lr_groups}")
 
@@ -1906,7 +1913,11 @@ def train(config=None):
                 meta_stats['group_ids'] = prev_group_ids
                 meta_stats['n_groups'] = config.hierarchical.n_groups
                 _inject_alpha_guidance(meta_stats, config, episode_count)
-                meta_reward = compute_meta_reward(meta_stats) * config.hierarchical.meta_reward_scale
+                meta_reward = compute_meta_reward(
+                    meta_stats,
+                    reward_scale=float(config.hierarchical.meta_reward_scale),
+                    structure_scale=float(getattr(config.hierarchical, 'meta_structure_scale', 5.0)),
+                )
                 meta_buffer.store(
                     prev_meta_obs, prev_split,
                     prev_log_prob, meta_reward, prev_value,
@@ -2002,7 +2013,11 @@ def train(config=None):
                 meta_stats['group_ids'] = prev_group_ids
                 meta_stats['n_groups'] = config.hierarchical.n_groups
                 _inject_alpha_guidance(meta_stats, config, episode_count)
-                meta_reward = compute_meta_reward(meta_stats) * config.hierarchical.meta_reward_scale
+                meta_reward = compute_meta_reward(
+                    meta_stats,
+                    reward_scale=float(config.hierarchical.meta_reward_scale),
+                    structure_scale=float(getattr(config.hierarchical, 'meta_structure_scale', 5.0)),
+                )
                 meta_buffer.store(
                     prev_meta_obs, prev_split,
                     prev_log_prob, meta_reward, prev_value,

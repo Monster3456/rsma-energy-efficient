@@ -198,6 +198,12 @@ if __name__ == "__main__":
                         help='P2a：Worker d 块固定 1.0（不学习 drain 头；可解释性取证驱动，默认关）')
     parser.add_argument('--fix-order', action='store_true',
                         help='P2b：解码序固定信道增益降序（不学习 PL 头；默认关）')
+    parser.add_argument('--meta-zeta', action='store_true',
+                        help='Arm C：目标条件化，Meta 输出慢尺度交付目标 ζ，'
+                             'Worker 观测加入 ζ_norm、DVQ 目标改为 ζ（默认关）')
+    parser.add_argument('--simplified-action', action='store_true',
+                        help='Arm A：精简动作模式，Worker 只输出 (p, 解码序)，'
+                             'α 由 Meta 给、d_k≡1，动作 4K→2K（默认关=官方口径）')
     parser.add_argument('--n_groups', type=int, default=None,
                         help='P2c：覆盖 hierarchical.n_groups（评估 G=1 分组坍缩裁剪；默认 4）')
     parser.add_argument('--lr-bucket-expert', type=float, default=None,
@@ -336,6 +342,10 @@ if __name__ == "__main__":
         config.ppo.worker_fix_drain = True
     if args.fix_order:
         config.ppo.worker_fix_order = True
+    if args.simplified_action:
+        config.ppo.worker_simplified_action = True
+    if args.meta_zeta:
+        config.hierarchical.meta_zeta_enabled = True
     if args.n_groups is not None:
         config.hierarchical.n_groups = int(args.n_groups)
 

@@ -59,10 +59,15 @@ class SolverExpert:
     def __init__(self, env, n_steps: int = 25, lr: float = 0.1,
                  order_candidates: Sequence[str] = ("gain_desc", "queue_last"),
                  dtype: torch.dtype = torch.float64,
-                 use_true_channel: bool = True):
+                 use_true_channel: bool = True,
+                 simplified_action: bool = False):
         """``use_true_channel=False`` 使 surrogate 仅用估计信道 Ĥ（declared 速率），
         得到**因果**逐槽优化基线；默认 True 时 surrogate 的 outage 速率含真信道
-        H_true 项（oracle 上界，用于信息-gap 分析，不可作为因果对照）。"""
+        H_true 项（oracle 上界，用于信息-gap 分析，不可作为因果对照）。
+
+        ``simplified_action=True``（Arm A 精简模式）时 ``cont_action`` 只含 p 块
+        （1K），α 由 Meta 的 split_mask 给出、d_k≡1，与 Worker 的 2K 动作对齐。
+        """
         self.env_ref = env
         self.K = int(env.K)
         self.n_steps = int(n_steps)
@@ -70,6 +75,7 @@ class SolverExpert:
         self.order_candidates = tuple(order_candidates)
         self.dtype = dtype
         self.use_true_channel = bool(use_true_channel)
+        self.simplified_action = bool(simplified_action)
         self.engine = DiffRSMAEngine(
             K=env.K, N_r=env.N_r, N_t=env.N_t,
             sigma2=env.rate_calc.sigma2, dtype=dtype,
@@ -301,11 +307,15 @@ class SolverExpert:
                 best = cand
 
         p_act = np.clip(best["theta"], -ACT_BOUND, ACT_BOUND)
-        cont_action = np.concatenate([
-            np.full(self.K, ACT_BOUND, dtype=np.float64),   # α 块：死维，发射满格
-            p_act,                                          # p logits（env 原始使用）
-            np.full(self.K, ACT_BOUND, dtype=np.float64),   # d 块：d=D_FRAC
-        ])
+        if self.simplified_action:
+            # Arm A 精简模式：cont_action 只含 p 块（1K），α 由 Meta 给、d_k≡1
+            cont_action = p_act.copy()
+        else:
+            cont_action = np.concatenate([
+                np.full(self.K, ACT_BOUND, dtype=np.float64),   # α 块：死维，发射满格
+                p_act,                                          # p logits（env 原始使用）
+                np.full(self.K, ACT_BOUND, dtype=np.float64),   # d 块：d=D_FRAC
+            ])
         full_action = np.concatenate([
             cont_action, best["order"].astype(np.float64)
         ])

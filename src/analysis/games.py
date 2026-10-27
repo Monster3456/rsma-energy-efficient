@@ -47,10 +47,20 @@ def _hinge_lp(X_S: np.ndarray, y: np.ndarray):
     c[r + 1 :] = 1.0 / m
     _L = 1e8
     bounds = [(-_L, _L)] * (r + 1) + [(0.0, None)] * m
-    # hiGHS 默认解对高度不平衡/近退化实例偶发 "HiGHS Status 0: Not Set"：
-    # 依次退化到 presolve=False 与内点法（三者数值解相同，仅求解器鲁棒性不同）。
+    # hiGHS 默认解对高度不平衡/近退化实例偶发失败，两类症状：
+    #   (a) "HiGHS Status 0: Not Set"（无界变量 + 99:1 标签）
+    #   (b) "solution does not satisfy the constraints within tolerance"（m 变大后）
+    # 依次退化到 presolve=False、内点法、放宽可行性容差（最优值相同，仅鲁棒性不同）。
     last = None
-    for method, opts in (("highs", {}), ("highs", {"presolve": False}), ("highs-ipm", {})):
+    recipes = (
+        ("highs", {}),
+        ("highs", {"presolve": False}),
+        ("highs-ipm", {}),
+        ("highs-ipm", {"presolve": False}),
+        ("highs", {"primal_feasibility_tolerance": 1e-6, "dual_feasibility_tolerance": 1e-6}),
+        ("highs-ds", {"primal_feasibility_tolerance": 1e-5, "dual_feasibility_tolerance": 1e-5}),
+    )
+    for method, opts in recipes:
         try:
             res = sopt.linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method=method, options=opts)
             if res.success:
@@ -102,13 +112,20 @@ def hinge_lp_solution(X_S: np.ndarray, y: np.ndarray):
 _CTX: dict = {}
 
 
-def _init_worker(Xs, ys: np.ndarray, c_tilde: float, tr_N: float, full_mask: int) -> None:
-    """把博弈数据注入子进程全局（spawn 时随 initargs 序列化一次）。"""
+def _init_worker(Xs, ys: np.ndarray, c_tilde: float, tr_N: float, full_mask: int,
+                 col_idx=None) -> None:
+    """把博弈数据注入子进程全局（spawn 时随 initargs 序列化一次）。
+
+    ``col_idx``：玩家空间 bit → **原始特征列号**的映射（即 :func:`svea_game` 的
+    ``active``）。``exclude`` 非空时玩家数 < 特征数，缺了这个映射会把 mask 位
+    误当原始列号取（见 :func:`_eval_mask_par`）。
+    """
     global _CTX
     _CTX = {
         "Xs": Xs, "ys": ys,
         "c_tilde": float(c_tilde), "tr_N": float(tr_N),
         "full_mask": int(full_mask), "n_feat": int(full_mask).bit_length(),
+        "col_idx": None if col_idx is None else np.asarray(col_idx, dtype=np.int64),
     }
 
 
@@ -119,9 +136,9 @@ def _eval_mask_par(mask: int) -> float:
         return p["c_tilde"]
     if mask == p["full_mask"]:
         return p["tr_N"]
-    cols = np.array(
-        [j for j in range(p["n_feat"]) if mask & (1 << j)], dtype=np.int64
-    )
+    bits = np.array([j for j in range(p["n_feat"]) if mask & (1 << j)], dtype=np.int64)
+    ci = p.get("col_idx")
+    cols = bits if ci is None else np.asarray(ci, dtype=np.int64)[bits]
     return p["c_tilde"] - tr_er(p["Xs"][:, cols], p["ys"])
 
 
@@ -138,7 +155,7 @@ def _mask_sequence(perms: np.ndarray, n: int) -> set[int]:
 
 
 def mc_permutation_shapley(eval_subset, n: int, B: int, rng: np.random.Generator,
-                           workers: int = 1):
+                           workers: int = 1, col_idx=None):
     """Maleki 式 MC 排列采样 Shapley 值（两阶段：先定 mask 集 → 求值 → 走游走）。
 
     Args:
@@ -148,6 +165,9 @@ def mc_permutation_shapley(eval_subset, n: int, B: int, rng: np.random.Generator
         rng: 确定性随机源。
         workers: >1 时用 ProcessPool 并行求值（值只算一次、顺序无关 →
             结果与串行逐位一致，仅墙钟不同）；≤1 串行。
+        col_idx: 玩家 bit → 原始特征列号映射（``exclude`` 时的 ``active``）。
+            并行路径**必须**带上，否则 mask 位会被误当原始列号（回归测试
+            ``test_parallel_matches_serial_with_exclude`` 锁定）。
 
     Returns:
         (phi (n,), n_solves): 均值 Shapley 与特征函数求值次数（= 去重 mask 数）。
@@ -166,7 +186,7 @@ def mc_permutation_shapley(eval_subset, n: int, B: int, rng: np.random.Generator
             max_workers=int(workers),
             initializer=_init_worker,
             initargs=(_CTX.get("Xs"), _CTX.get("ys"), _CTX.get("c_tilde"),
-                      _CTX.get("tr_N"), full_mask),
+                      _CTX.get("tr_N"), full_mask, col_idx),
         ) as ex:
             vals = list(ex.map(_eval_mask_par, masks))
         value = dict(zip(masks, vals))
@@ -212,6 +232,69 @@ def t_ci(e_matrix: np.ndarray):
     se = e.std(axis=0, ddof=1) / np.sqrt(G)
     tcrit = float(sstats.t.ppf(0.975, G - 1))
     return mean, mean - tcrit * se, mean + tcrit * se
+
+
+def left_of_origin(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+    """Tripathi et al. (2020) §3.2 显著性判据：区间估计整体落在原点左侧（hi < 0）。
+
+    原文把该判据等同于「特征对标签预测的联合贡献显著」，并声称区间估计与阈值 0
+    的 FSS 结论一致。
+    """
+    lo = np.asarray(lo, dtype=np.float64)
+    hi = np.asarray(hi, dtype=np.float64)
+    return np.asarray(hi < 0.0, dtype=bool)
+
+
+def mean_subgame_e(
+    X: np.ndarray,
+    y: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    n_sub: int = 30,
+    m_sv: int = 200,
+    B: int = 15,
+    exclude: np.ndarray | None = None,
+    zscore: bool = False,
+    workers: int = 1,
+) -> np.ndarray:
+    """Tripathi et al. (2020) §3.2 的**组内**估计：n_sub 个子博弈的 SVEA 向量取平均。
+
+    原文把数据切成不相交子样本后，对一组 30 个子样本求组均值 ``e_j^g``，
+    再用 CLT 对 G 个组均值做 t 区间。组内平均是其抗样本偏差的关键步骤
+    （单个子博弈方差大，平均 30 次后组均值才近似正态）。
+
+    本任务的必要适配（须在论文中披露）：``served`` 标签在 25--30 dB 只有约 0.6%
+    少数类（全网格约 330 个负样本），无法切出「每个子样本都含少数类」的不相交
+    划分；因此子博弈样本 = 组内**独立分层抽取**（沿用 :func:`svea_game` 的
+    ``class_cap`` 规则），由调用方在**组间**做不相交划分保证独立性。
+
+    Args:
+        X: 组内样本 (n_rows, n_features)。
+        y: (n_rows,) ∈ {−1,+1}。
+        rng: 确定性随机源（子博弈逐个派生种子，结果可复现）。
+        n_sub: 组内子博弈数（原文 = 30）。
+        m_sv: 单个子博弈的目标样本数。
+        B: 单个子博弈的排列样本数。
+        exclude: null-player 特征下标（与主博弈一致）。
+        zscore: 是否在组内再标准化（主口径 False，标准化在全集上做一次）。
+        workers: 透传给 :func:`svea_game`。
+
+    Returns:
+        (n_features,) 组均值向量 ``e_j^g``。
+    """
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    n_sub = max(1, int(n_sub))
+    ss = rng.integers(0, 2**63 - 1, size=n_sub)
+    e_subs = np.empty((n_sub, X.shape[1]), dtype=np.float64)
+    for i in range(n_sub):
+        sub_rng = np.random.default_rng(int(ss[i]))
+        game = svea_game(
+            X, y, sub_rng, m_sv=m_sv, B=B,
+            zscore=zscore, exclude=exclude, workers=workers,
+        )
+        e_subs[i] = game["sv"]
+    return e_subs.mean(axis=0)
 
 
 # ---------------------------------------------------------------- 分类博弈 --
@@ -323,10 +406,10 @@ def svea_game(
 
     global _CTX
     if int(workers) > 1:
-        # 并行路径：把样本与常数注入模块级上下文（子进程 initargs 用）
-        _CTX.update(Xs=Xs, ys=ys, c_tilde=c_tilde, tr_N=tr_N)
+        # 并行路径：把样本、常数与 **列映射** 注入模块级上下文（子进程 initargs 用）
+        _CTX.update(Xs=Xs, ys=ys, c_tilde=c_tilde, tr_N=tr_N, col_idx=active)
     phi_active, n_solves = mc_permutation_shapley(eval_subset, n_active, B, rng,
-                                                  workers=int(workers))
+                                                  workers=int(workers), col_idx=active)
     phi = np.zeros(n_feat, dtype=np.float64)  # null player → 0
     phi[active] = phi_active
     sv = svea(phi, c_tilde, n_feat)  # 原始 n=13 的仿射变换

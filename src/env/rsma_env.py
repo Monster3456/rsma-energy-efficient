@@ -204,6 +204,12 @@ class RSMAEnergyEnv(gym.Env):
         )
         if self.hierarchical_enabled:
             self._obs_dim += 1  # 追加 power_budget_normalized 维度
+        # Arm C: 目标条件化 —— 追加 ζ_norm（慢尺度交付目标）
+        self.zeta_enabled = bool(getattr(getattr(self.config, 'hierarchical', None), 'meta_zeta_enabled', False))
+        self._delivery_target = 0.95
+        self.zeta_cap = 1.0
+        if self.zeta_enabled:
+            self._obs_dim += 1
 
         # Task#38: Group-level α 架构开关。开启后 split_mask 被作为
         # per-user 连续 α 值【覆盖】Worker 的 α 输出（而非仅作二值 gate）。
@@ -245,6 +251,8 @@ class RSMAEnergyEnv(gym.Env):
         self.lambda_bucket_val: float = 0.0
 
         # 将 Dinkelbach q 管理权交给训练循环（外层每 10 episode 更新）
+        # Arm B: 分组数（>1 时 Lyapunov 用组级 Y_g，使分组改变奖励）
+        self.lyapunov.n_groups = int(getattr(getattr(self.config, 'hierarchical', None), 'n_groups', 1) or 1)
         self.lyapunov.dinkelbach_q = self.dinkelbach_eta
         self.lyapunov.dinkelbach_outer_update = bool(
             getattr(lya_cfg, "dinkelbach_outer_update", False)
@@ -356,8 +364,22 @@ class RSMAEnergyEnv(gym.Env):
             reward_v2_weight_hi=getattr(lya_cfg, "reward_v2_weight_hi", 2.0),
         )
 
+    def set_delivery_target(self, zeta: float) -> None:
+        """Arm C 目标条件化：Meta 下发慢尺度交付目标 ζ。
+
+        同时 (1) 写入观测的 ζ_norm 全局维，(2) 作为交付虚拟队列的目标值，
+        使慢层目标真正改变快层的约束压力。
+        """
+        z = float(np.clip(zeta, 0.0, 2.0))
+        self._delivery_target = z
+        self.lyapunov.dvq_target = z
+
     def _parse_action(self, action) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """解析 3K 维动作为 (alpha, p_total, d_ratio).
+        """解析连续动作块为 (alpha, p_total, d_ratio)。
+
+        连续块长度判模式：
+          - 1K（Arm A 精简）: [p_total(K)]，α 由 split_mask 给出、d_k≡1；
+          - 3K（常规）:       [alpha, p_total, d_ratio]。
 
         PPO 输出通常位于 (-1, 1) 区间, 通过 (x+1)/2 线性映射到 [0,1].
 
@@ -365,30 +387,39 @@ class RSMAEnergyEnv(gym.Env):
         per-user α 值 (连续)，此时覆盖 Worker 的 α 输出。
         """
         a = np.asarray(action, dtype=np.float64).reshape(-1)
-        if a.shape[0] != self.action_dim:
-            raise ValueError(f"action shape {a.shape} != ({self.action_dim},)")
+        simplified = a.shape[0] == self.K
+        if not simplified and a.shape[0] != self.action_dim:
+            raise ValueError(f"action shape {a.shape} != ({self.action_dim},) or ({self.K},)")
 
         a = np.clip(a, -1.0, 1.0)
         mapped = (a + 1.0) / 2.0  # → [0, 1]
 
         K = self.K
-        if self.group_level_alpha:
+        # α：精简模式无 α 块，一律走 split_mask；常规模式按 group_level_alpha 分派
+        if simplified or self.group_level_alpha:
             # split_mask = per-user α (从 Meta group α 展开)，覆盖 Worker 的 α
             alpha = np.clip(self.split_mask.astype(np.float64), 0.0, 1.0)
         else:
             alpha = np.clip(mapped[0:K], 0.0, 1.0)
             # split_mask 约束: non-split 用户 alpha=0, 全部功率归私有流
             alpha = alpha * self.split_mask
+
+        p_off = 0 if simplified else K
         if bool(getattr(self.config.system, 'use_softmax_power_share', False)):
             # Mean-Field MAPPO: p 块是 K 个 logits，softmax 后得到总功率预算份额
-            p_logits = a[K:2 * K]
+            p_logits = a[p_off:p_off + K]
             p_logits = p_logits - np.max(p_logits)
             p_exp = np.exp(p_logits)
             p_ratio = self.K * p_exp / (np.sum(p_exp) + 1e-12)
             p_total = np.clip(p_ratio, 0.0, 1.0)
         else:
-            p_total = np.clip(mapped[K:2 * K], 0.0, 1.0)
-        d_ratio = np.clip(mapped[2 * K:3 * K], 0.0, 1.0)
+            p_total = np.clip(mapped[p_off:p_off + K], 0.0, 1.0)
+
+        # 排空：精简模式恒为 1（可解释性显示 d_k σ≈1.3e-5 饱和于 1）
+        if simplified:
+            d_ratio = np.ones(K, dtype=np.float64)
+        else:
+            d_ratio = np.clip(mapped[2 * K:3 * K], 0.0, 1.0)
         return alpha, p_total, d_ratio
 
     def _get_observation(self) -> np.ndarray:
@@ -570,6 +601,11 @@ class RSMAEnergyEnv(gym.Env):
 
         obs = np.concatenate(obs_blocks)
 
+        # Arm C: 目标条件化 —— 追加 ζ_norm
+        if self.zeta_enabled:
+            obs = np.append(obs, np.float64(
+                np.clip(self._delivery_target / max(self.zeta_cap, 1e-8), 0.0, 2.0)))
+
         # 分层模式: 追加 power_budget_normalized
         if self.hierarchical_enabled:
             if self.P_target is not None:
@@ -740,22 +776,28 @@ class RSMAEnergyEnv(gym.Env):
         """执行一个时隙, 返回 (observation, reward, terminated, truncated, info).
 
         Args:
-            action: (3K,) 或 (4K,) 连续动作。
+            action: (2K,) / (3K,) 或 (4K,) 连续动作。
+                - 2K维: [p_total, decoding_order]（Arm A 精简模式：
+                  α 由 split_mask 给出、d_k≡1）
                 - 3K维: [alpha, p_total, d_ratio] (向后兼容)
                 - 4K维: [alpha, p_total, d_ratio, decoding_order]
                   其中 decoding_order 为K维整数优先级，值越小越先解码。
         """
-        # 0. 解析 decoding_order (如果 action 为 4K 维)
+        # 0. 解析 decoding_order (如果 action 为 4K/2K 维)
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.shape[0] == 4 * self.K:
             continuous_action = action[:3 * self.K]
             self.decoding_order = action[3 * self.K:].astype(np.int64)
+        elif action.shape[0] == 2 * self.K:
+            # Arm A 精简动作：[p_total(K), decoding_order(K)]
+            continuous_action = action[: self.K]
+            self.decoding_order = action[self.K:].astype(np.int64)
         elif action.shape[0] == 3 * self.K:
             continuous_action = action
             # 保留之前设置的 decoding_order (可能由外部设置)
         else:
             raise ValueError(
-                f"action shape {action.shape} must be ({3*self.K},) or ({4*self.K},)"
+                f"action shape {action.shape} must be ({2*self.K},), ({3*self.K},) or ({4*self.K},)"
             )
 
         # Task#11 消融：disable_sic_order 时，强制采用信道增益降序（强用户先解码）
@@ -871,6 +913,7 @@ class RSMAEnergyEnv(gym.Env):
             user_overflow_weights=self.qos_user_overflow_weights if self.enable_hetero_qos else None,
             delivery_running=self.traffic.get_delivery_ratio(),
             arrivals=arrivals,
+            group_ids=getattr(self, 'group_ids', None),  # Arm B: 组级 DVQ
         )
         self._prev_queue = queue_before.copy()
 

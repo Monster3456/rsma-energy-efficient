@@ -373,6 +373,7 @@ class ActorCriticAttn(nn.Module):
                  c3po_n_points=7,
                  backpressure_beta=0.0,
                  backpressure_mode="queue",
+                 simplified_action=False,
                  fix_drain: bool = False,
                  fix_order: bool = False):
         """
@@ -425,7 +426,10 @@ class ActorCriticAttn(nn.Module):
         self.d_global = d_global
         self.hidden_dim = hidden_dim
         self.use_plackett_luce = True
-        self.continuous_dim = 3 * K
+        # Arm A 精简动作：只学 (p, z) 两块。α 由 Meta split_mask 给出、d_k≡1
+        # （可解释性：两块 σ≈1e-5 属死维/饱和），动作 4K→2K。
+        self.simplified_action = bool(simplified_action)
+        self.continuous_dim = 1 * K if self.simplified_action else 3 * K
         self.inject_global_to_per_user = bool(inject_global_to_per_user)
         self.n_global_inject = int(n_global_inject) if self.inject_global_to_per_user else 0
 
@@ -497,8 +501,11 @@ class ActorCriticAttn(nn.Module):
                 "ln2": nn.LayerNorm(hidden_dim),
             }))
 
-        # per-user output head: 输出 4 维 (alpha_raw, p_raw, d_raw, z_raw)
-        self.user_head = nn.Linear(hidden_dim, 4)
+        # per-user output head
+        # 常规模式: 4 维 (alpha_raw, p_raw, d_raw, z_raw)
+        # 精简模式: 2 维 (p_raw, z_raw) —— α 由 Meta 给、d_k≡1，动作 4K→2K
+        self.head_dim = 2 if self.simplified_action else 4
+        self.user_head = nn.Linear(hidden_dim, self.head_dim)
         orthogonal_init(self.user_head, gain=0.01)
 
         # 桶专家多头：从参考头深拷贝 G 个专家头，step-0 行为逐 bit 等价于 best。
@@ -515,10 +522,12 @@ class ActorCriticAttn(nn.Module):
         # P3: SNR/ε 直通 actor head 的 bias 路径（让全局信号直接控制 α 和 p_total
         # 输出，绕过所有 LayerNorm，强化 α 跨 SNR/ε 的响应）
         # 用 zeros 初始化让训练初期等价于 P2 行为，逐步学习如何利用此路径
-        self.global_to_alpha_bias = nn.Linear(d_global, 1)
+        # 精简模式不输出 α，故只建 p 的 bias 路径（保持参数集最小）
+        self.global_to_alpha_bias = nn.Linear(d_global, 1) if not self.simplified_action else None
         self.global_to_p_bias = nn.Linear(d_global, 1)
-        nn.init.zeros_(self.global_to_alpha_bias.weight)
-        nn.init.zeros_(self.global_to_alpha_bias.bias)
+        if self.global_to_alpha_bias is not None:
+            nn.init.zeros_(self.global_to_alpha_bias.weight)
+            nn.init.zeros_(self.global_to_alpha_bias.bias)
         nn.init.zeros_(self.global_to_p_bias.weight)
         nn.init.zeros_(self.global_to_p_bias.bias)
 
@@ -735,10 +744,11 @@ class ActorCriticAttn(nn.Module):
             bucket_indices = bucket_indices.clamp(0, self.n_experts - 1)
 
         # 计算全部专家输出后按桶索引 gather；未选中的专家不产生梯度。
-        expert_outputs = torch.stack([head(h) for head in self.expert_heads], dim=0)  # (G, B, K, 4)
+        expert_outputs = torch.stack([head(h) for head in self.expert_heads], dim=0)  # (G, B, K, head_dim)
         K = h.shape[1]
-        idx = bucket_indices.view(1, -1, 1, 1).expand(1, batch, K, 4)
-        output = torch.gather(expert_outputs, 0, idx).squeeze(0)  # (B, K, 4)
+        # head_dim 随模式变（常规 4 / 精简 2），不能硬编码
+        idx = bucket_indices.view(1, -1, 1, 1).expand(1, batch, K, self.head_dim)
+        output = torch.gather(expert_outputs, 0, idx).squeeze(0)  # (B, K, head_dim)
         return output
 
     def sync_expert_heads_from_reference(self):
@@ -779,25 +789,36 @@ class ActorCriticAttn(nn.Module):
 
         # Actor
         h = self._actor_forward(obs)  # (batch, K, hidden)
-        head_out = self._head_forward(h, bucket_indices=bucket_indices)  # (batch, K, 4)
+        head_out = self._head_forward(h, bucket_indices=bucket_indices)  # (batch, K, head_dim)
         # P3: SNR/ε 直通 head bias（broadcast 到所有 K 用户）
         per_user_act, global_feat_act = self._split_obs(obs)
-        a_bias = self.global_to_alpha_bias(global_feat_act).unsqueeze(1)  # (batch, 1, 1)
         p_bias = self.global_to_p_bias(global_feat_act).unsqueeze(1)
-        # 拆 4 维
-        alpha_raw = head_out[..., 0] + a_bias.squeeze(-1)   # (batch, K)
-        p_raw     = head_out[..., 1] + p_bias.squeeze(-1)   # (batch, K)
         bp = self._backpressure_shift(per_user_act)
-        if int(self.backpressure_mode_buf) in (2, 3):
-            # mw_residual / mw_gated：基座替换——p 块均值 = 闭式 max-weight(×门) + head 残差
-            p_raw = bp + head_out[..., 1]
-        else:
-            p_raw = p_raw + bp
-        d_raw     = head_out[..., 2]    # (batch, K)
-        z_raw     = head_out[..., 3]    # (batch, K)
 
-        # 拼成 3K 连续动作
-        continuous_mean = torch.cat([alpha_raw, p_raw, d_raw], dim=-1)  # (batch, 3K)
+        if self.simplified_action:
+            # 精简模式：head 输出 (p_raw, z_raw)，动作只含 p 块；α 由 Meta 给、d_k≡1
+            p_raw = head_out[..., 0] + p_bias.squeeze(-1)   # (batch, K)
+            if int(self.backpressure_mode_buf) in (2, 3):
+                p_raw = bp + head_out[..., 0]
+            else:
+                p_raw = p_raw + bp
+            z_raw = head_out[..., 1]
+            continuous_mean = p_raw                          # (batch, 1K)
+        else:
+            a_bias = self.global_to_alpha_bias(global_feat_act).unsqueeze(1)
+            # 拆 4 维
+            alpha_raw = head_out[..., 0] + a_bias.squeeze(-1)   # (batch, K)
+            p_raw     = head_out[..., 1] + p_bias.squeeze(-1)   # (batch, K)
+            if int(self.backpressure_mode_buf) in (2, 3):
+                # mw_residual / mw_gated：基座替换——p 块均值 = 闭式 max-weight(×门) + head 残差
+                p_raw = bp + head_out[..., 1]
+            else:
+                p_raw = p_raw + bp
+            d_raw     = head_out[..., 2]    # (batch, K)
+            z_raw     = head_out[..., 3]    # (batch, K)
+
+            # 拼成 3K 连续动作
+            continuous_mean = torch.cat([alpha_raw, p_raw, d_raw], dim=-1)  # (batch, 3K)
         std = self.log_std.clamp(-3.0, 0.5).exp()
 
         if deterministic:
@@ -811,8 +832,9 @@ class ActorCriticAttn(nn.Module):
             continuous_log_prob = continuous_log_prob - torch.sum(
                 torch.log(1 - action_squashed.pow(2) + 1e-6), dim=-1
             )
-        if self.fix_drain:
+        if self.fix_drain and not self.simplified_action:
             # P2a：d 块恒为 +1（env 口径 d=(a+1)/2=1.0），行为与"始终全排空"一致
+            # 精简模式本就不含 d 块（d_k≡1 由 env 侧保证），无需此步
             action_squashed[..., 2 * self.K : 3 * self.K] = 1.0
 
         # PL 解码序
@@ -860,18 +882,28 @@ class ActorCriticAttn(nn.Module):
         head_out = self._head_forward(h, bucket_indices=bucket_indices)
         # P3: SNR/ε 直通 head bias
         per_user_eval, global_feat_eval = self._split_obs(obs)
-        a_bias = self.global_to_alpha_bias(global_feat_eval).unsqueeze(1)
         p_bias = self.global_to_p_bias(global_feat_eval).unsqueeze(1)
-        alpha_raw = head_out[..., 0] + a_bias.squeeze(-1)
-        p_raw = head_out[..., 1] + p_bias.squeeze(-1)
         bp = self._backpressure_shift(per_user_eval)
-        if int(self.backpressure_mode_buf) in (2, 3):
-            p_raw = bp + head_out[..., 1]
+
+        if self.simplified_action:
+            p_raw = head_out[..., 0] + p_bias.squeeze(-1)
+            if int(self.backpressure_mode_buf) in (2, 3):
+                p_raw = bp + head_out[..., 0]
+            else:
+                p_raw = p_raw + bp
+            z_raw = head_out[..., 1]
+            continuous_mean = p_raw                      # (batch, 1K)
         else:
-            p_raw = p_raw + bp
-        d_raw = head_out[..., 2]
-        z_raw = head_out[..., 3]
-        continuous_mean = torch.cat([alpha_raw, p_raw, d_raw], dim=-1)
+            a_bias = self.global_to_alpha_bias(global_feat_eval).unsqueeze(1)
+            alpha_raw = head_out[..., 0] + a_bias.squeeze(-1)
+            p_raw = head_out[..., 1] + p_bias.squeeze(-1)
+            if int(self.backpressure_mode_buf) in (2, 3):
+                p_raw = bp + head_out[..., 1]
+            else:
+                p_raw = p_raw + bp
+            d_raw = head_out[..., 2]
+            z_raw = head_out[..., 3]
+            continuous_mean = torch.cat([alpha_raw, p_raw, d_raw], dim=-1)
 
         std = self.log_std.clamp(-3.0, 0.5).exp()
         dist = Normal(continuous_mean, std)
@@ -879,7 +911,7 @@ class ActorCriticAttn(nn.Module):
         action_raw = torch.atanh(actions_clipped)
         ls = dist.log_prob(action_raw)
         log1 = torch.log(1 - actions_clipped.pow(2) + 1e-6)
-        if self.fix_drain:
+        if self.fix_drain and not self.simplified_action:
             # P2a：d 块 log 密度/雅可比贡献清零 → 该头不接收梯度（行为已由 act 固定）
             ls = ls.clone()
             log1 = log1.clone()
@@ -887,7 +919,7 @@ class ActorCriticAttn(nn.Module):
             log1[..., 2 * self.K : 3 * self.K] = 0.0
         continuous_log_prob = ls.sum(dim=-1) - log1.sum(dim=-1)
         ent = dist.entropy()
-        if self.fix_drain:
+        if self.fix_drain and not self.simplified_action:
             ent = ent.clone()
             ent[..., 2 * self.K : 3 * self.K] = 0.0
         continuous_entropy = ent.sum(dim=-1)

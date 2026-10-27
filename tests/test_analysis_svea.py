@@ -152,6 +152,85 @@ def test_t_ci_shapes():
     assert np.all(lo <= mean) and np.all(mean <= hi)
 
 
+def test_left_of_origin_criterion():
+    """Tripathi §3.2 判据：区间整体落在原点左侧 ⇔ 上界 < 0。"""
+    from src.analysis.games import left_of_origin
+
+    lo = np.array([-2.0, -1.0, -0.5, 0.1])
+    hi = np.array([-0.5, -0.0, 0.2, 0.3])
+    flag = left_of_origin(lo, hi)
+    assert flag.dtype == bool and flag.shape == (4,)
+    assert list(flag) == [True, False, False, False]
+
+
+def test_mean_subgame_e_shape_and_determinism():
+    """组内 n_sub 个子博弈取均值：形状 (n_features,)，同种子可复现。"""
+    from src.analysis.games import mean_subgame_e
+
+    rng = _rng(31)
+    m = 120
+    x0 = np.where(rng.random(m) < 0.5, 1.0, -1.0)
+    X = np.column_stack([x0, rng.normal(size=(m, 3))])
+    y = x0.copy()
+
+    e1 = mean_subgame_e(X, y, _rng(40), n_sub=5, m_sv=60, B=20)
+    e2 = mean_subgame_e(X, y, _rng(40), n_sub=5, m_sv=60, B=20)
+    e3 = mean_subgame_e(X, y, _rng(41), n_sub=5, m_sv=60, B=20)
+    assert e1.shape == (4,)
+    np.testing.assert_allclose(e1, e2, atol=1e-12)  # 同种子逐位复现
+    assert not np.allclose(e1, e3), "不同种子应给出不同抽样"
+    assert np.all(np.isfinite(e1))
+
+
+def test_mean_subgame_e_recovers_dominant_feature():
+    """单特征可分数据：组均值应把信息特征判为支配（e<0），噪声特征不支配。
+
+    组内平均 30 个子博弈是 Tripathi §3.2 的抗噪关键步骤——平均后组均值稳定为负。
+    """
+    from src.analysis.games import mean_subgame_e
+
+    rng = _rng(33)
+    m = 400
+    x0 = np.where(rng.random(m) < 0.5, 1.0, -1.0)
+    X = np.column_stack([x0, rng.normal(size=(m, 3))])
+    y = x0.copy()
+
+    e_one = mean_subgame_e(X, y, _rng(50), n_sub=1, m_sv=120, B=30)
+    e_avg = mean_subgame_e(X, y, _rng(51), n_sub=30, m_sv=120, B=30)
+    assert e_avg[0] < 0.0, f"信息特征应支配，e[0]={e_avg[0]}"
+    assert e_avg[0] < 0.0 <= e_avg[1] or e_avg[0] < e_avg[1], "噪声特征不得比信息特征更支配"
+    # 平均 30 个子博弈后不应比单次更接近噪声零线（符号判定更稳）
+    assert e_avg[0] < 0.0 and (e_one[0] < 0.0 or e_avg[0] < -0.01)
+
+
+def test_parallel_matches_serial_with_exclude():
+    """回归锁定：exclude 非空时并行 mask→列映射必须与串行逐位一致。
+
+    曾经的 bug：``_eval_mask_par`` 把 mask 位直接当**原始列号**取，绕过 ``active``
+    映射。exclude 非空时玩家数 < 特征数，于是并行路径在错误的列子集上解 LP——
+    噪声列互换时误差小不易察觉，但会把位于高位列的信息特征判成非支配。
+    """
+    rng = _rng(7)
+    m = 500
+    x0 = np.where(rng.random(m) < 0.5, 1.0, -1.0)
+    x11 = np.where(rng.random(m) < 0.5, 1.0, -1.0)
+    X = rng.normal(size=(m, 13))
+    X[:, 0] = x0                    # 信息列（低位）
+    X[:, 3] = 0.5                   # 常数 → null player
+    X[:, 6] = 1.0
+    X[:, 10] = -2.0
+    X[:, 11] = x11                  # 信息列（高位，active 里但 buggy 映射下会丢）
+    y = np.where(x0 + x11 + 0.1 * rng.normal(size=m) > 0, 1.0, -1.0)
+    const = np.array([3, 6, 10])
+
+    g1 = svea_game(X, y, _rng(100), m_sv=300, B=80, exclude=const, zscore=False, workers=1)
+    g2 = svea_game(X, y, _rng(100), m_sv=300, B=80, exclude=const, zscore=False, workers=2)
+    np.testing.assert_allclose(g2["phi"], g1["phi"], atol=1e-9, err_msg="并行/串行 Shapley 必须逐位一致")
+    np.testing.assert_allclose(g2["sv"], g1["sv"], atol=1e-9)
+    assert list(g2["sv_neg"]) == list(g1["sv_neg"])
+    assert set(g1["sv_neg"]) == {0, 11}, "两个信息列都应被判为支配（否则映射仍错）"
+
+
 def test_standardize_matches_scipy():
     """z-score 与手动标准化一致（仿射不变性检查）。"""
     rng = _rng(5)

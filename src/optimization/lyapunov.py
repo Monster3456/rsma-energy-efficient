@@ -6,7 +6,6 @@
 与旧版 drift 信号（仅惩罚队列增长 ΣQ·ΔQ）不同，
 LDPTRLQ 直接惩罚队列存在性 ΣQ²，从根本上压低稳态队列长度。
 """
-from typing import Dict, Optional
 
 import numpy as np
 
@@ -214,6 +213,8 @@ class LyapunovController:
         self.w_vq_throughput = 0.08       # Y 加权吞吐项系数
         self.dvq_backlog_mix = 0.3        # 吞吐项中 backlog 加权占比(其余为均匀 ΣD_k)
         self._Y = 0.0
+        self._Y_g = None   # Arm B: 组级交付欠账 DVQ（首次用到时按 n_groups 建）
+        self.n_groups = 1  # Arm B: 分组数；>1 时启用组级 Y_g
 
         # ---- 能量 Lyapunov 虚拟队列 X (drift-plus-penalty 强制平均功率约束) ----
         # X 随功率超预算无界增长, 作为功率的自适应对偶价格; 把EE短板(功率>SDMA)拉回
@@ -288,6 +289,8 @@ class LyapunovController:
         self._avg_served = np.full(self.K, self.fair_eps, dtype=np.float64)
         self._crpo_feasible = False
         self._Y = 0.0
+        self._Y_g = None   # Arm B: 组级交付欠账 DVQ（首次用到时按 n_groups 建）
+        # 注意：n_groups 不在此重置——它是配置属性，reset() 只清状态
         self._X = 0.0
         self._dgmw_panic = False
 
@@ -300,20 +303,23 @@ class LyapunovController:
         served_bits: np.ndarray,
         power_consumed: np.ndarray,
         overflow: np.ndarray,
-        prev_queue: Optional[np.ndarray] = None,
+        prev_queue: np.ndarray | None = None,
         # 以下参数保留接口兼容性
-        outage_flags: Optional[np.ndarray] = None,
-        sigma2: Optional[float] = None,
-        R_sum: Optional[float] = None,
-        P_target: Optional[float] = None,
+        outage_flags: np.ndarray | None = None,
+        sigma2: float | None = None,
+        R_sum: float | None = None,
+        P_target: float | None = None,
         # v13 QoS: per-user 加权
-        user_drift_weights: Optional[np.ndarray] = None,
-        user_overflow_weights: Optional[np.ndarray] = None,
+        user_drift_weights: np.ndarray | None = None,
+        user_overflow_weights: np.ndarray | None = None,
         # CRPO 可行性门控：本 episode 累计 running delivery ratio
-        delivery_running: Optional[float] = None,
+        delivery_running: float | None = None,
         # per-user 到达量, 用于更新 Neely 交付欠账虚拟队列 Z_k
-        arrivals: Optional[np.ndarray] = None,
-    ) -> Dict[str, float]:
+        arrivals: np.ndarray | None = None,
+        # Arm B: per-user 分组归属（0..G-1）。给定时 Y 虚拟队列按组核算（Y_g），
+        # 使分组**改变奖励**而不只是改变速率与 α 展开。
+        group_ids: np.ndarray | None = None,
+    ) -> dict[str, float]:
         """计算 LDPTRLQ 奖励。
 
         reward = scale * (V * ee_bonus - q_weight * ΣQ²/Q_max² - overflow_penalty)
@@ -609,14 +615,34 @@ class LyapunovController:
                 power_vq_penalty = 0.0
 
             # (e) Y 虚拟队列: 自适应对偶, 欠交付累积→自动抬升 throughput 权重
+            # Arm B: 给定 group_ids 时按组核算 Y_g，使分组直接影响奖励
             D_total = float(np.sum(np.maximum(D, 0.0)))
             if arrivals is not None:
                 A_arr = np.asarray(arrivals, dtype=np.float64).reshape(-1)
                 A_total = float(np.sum(np.maximum(A_arr, 0.0)))
-                self._Y = max(self._Y + (self.dvq_target * A_total - D_total), 0.0)
-                self._Y = min(self._Y, self.dvq_y_max)
-                y_weight = self._Y / max(self.dvq_y_scale, 1e-8)
-                y_component = self.w_y_tp * y_weight * D_total
+                g_ids = None if group_ids is None else np.asarray(group_ids).reshape(-1)
+                if g_ids is not None and g_ids.size == D.size and self.n_groups > 1:
+                    # 组级 DVQ：Y_g ← max(Y_g + target·A_g − D_g, 0)，再按组加权 ΣD_g
+                    G = int(self.n_groups)
+                    D_vec = np.maximum(np.asarray(D, dtype=np.float64).reshape(-1), 0.0)
+                    A_vec = np.maximum(A_arr, 0.0)
+                    gi = np.clip(g_ids.astype(np.int64), 0, G - 1)
+                    D_g = np.bincount(gi, weights=D_vec, minlength=G).astype(np.float64)
+                    A_g = np.bincount(gi, weights=A_vec, minlength=G).astype(np.float64)
+                    if self._Y_g is None:
+                        self._Y_g = np.zeros(G, dtype=np.float64)
+                    self._Y_g = np.clip(
+                        self._Y_g + (self.dvq_target * A_g - D_g), 0.0, self.dvq_y_max
+                    )
+                    y_weight_g = self._Y_g / max(self.dvq_y_scale, 1e-8)
+                    y_component = self.w_y_tp * float(np.dot(y_weight_g, D_g))
+                    # 聚合 Y 仍维护，供日志/诊断
+                    self._Y = float(self._Y_g.sum())
+                else:
+                    self._Y = max(self._Y + (self.dvq_target * A_total - D_total), 0.0)
+                    self._Y = min(self._Y, self.dvq_y_max)
+                    y_weight = self._Y / max(self.dvq_y_scale, 1e-8)
+                    y_component = self.w_y_tp * y_weight * D_total
             else:
                 y_component = 0.0
 
@@ -744,7 +770,7 @@ class LyapunovController:
     # ------------------------------------------------------------------ #
     # Introspection
     # ------------------------------------------------------------------ #
-    def get_v_tradeoff_info(self) -> Dict[str, float]:
+    def get_v_tradeoff_info(self) -> dict[str, float]:
         return {
             "V": float(self.V),
             "V_effective": float(self.V_effective),

@@ -62,3 +62,6 @@ docs/paper/*.log
 *.run.xml
 *.thm
 *.loe
+
+# RSMA-papers 是独立 git 仓库（远端 Monster3456/RSMA-papers），不嵌套
+RSMA-papers/

@@ -817,6 +817,7 @@ def train(config=None):
         group_alpha_log_std_init=getattr(
             config.hierarchical, 'group_alpha_log_std_init', -0.5
         ),
+        zeta_enabled=bool(getattr(config.hierarchical, 'meta_zeta_enabled', False)),
     ).to(device)
     meta_buffer = MetaRolloutBuffer(max_size=500)
     meta_trainer = MetaPPOTrainer(meta_ac, config.hierarchical)

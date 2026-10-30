@@ -1118,6 +1118,17 @@ def train(config=None):
             link_coef=getattr(config.ppo, 'entropy_link_coef', 1.0),
         )
         reset_options = {'snr_db': sampled_snr}
+    # D3: 逐点压力向量（复用硬例挖掘 7 点 EMA 短差，归一化 [0,1]）。
+    # 训练期每 episode 末 push 给 env；保存期随 checkpoint 落盘供评估侧冻结注入。
+    press_on = bool(getattr(config.system, "obs_pressure_vector", False))
+
+    def _hm_pressure_vec():
+        if not press_on or hm_state is None:
+            return None
+        _short = np.maximum(hm_state["targets"] - hm_state["ema"], 0.0)
+        _smax = max(float(_short.max()), 1e-8)
+        return [round(float(x), 6) for x in _short / _smax]
+
     obs, _ = env.reset(seed=config.seed, options=reset_options)
     _set_worker_bucket(worker_ac, env)
 
@@ -1867,6 +1878,11 @@ def train(config=None):
                 # CuRLTraC-ALP: 更新对应点的 delivery EMA 与 streak
                 if hm_on:
                     _hm_update(hm_state, _ep_snr_db, episode_delivery, hm_decay)
+                # D3: 更新后把逐点压力推给 env（下一 episode 的观测块）
+                if press_on and hm_state is not None:
+                    _pv = _hm_pressure_vec()
+                    if _pv is not None:
+                        env.set_pressure_vector(np.asarray(_pv))
                 # CRPO-S: episode级模式切换(迟滞带防振荡)。
                 # 注意: update 照常调用(EE模式桶仍需λ)，仅reward写入路径按模式分流。
                 if crpo_on and delivery_constraint is not None:
@@ -2301,6 +2317,7 @@ def train(config=None):
                 "worker_optimizer": worker_trainer.optimizer.state_dict(),
                 "meta_optimizer": meta_trainer.optimizer.state_dict(),
                 "config": vars(config.ppo),
+                "hm_pressure": _hm_pressure_vec(),
             }
             if delivery_constraint is not None:
                 ckpt_data["lagrangian_state"] = {
@@ -2383,6 +2400,7 @@ def train(config=None):
                         "meta_optimizer": meta_trainer.optimizer.state_dict(),
                         "config": vars(config.ppo),
                         "guard_avg_deliv": guard_best_deliv,
+                        "hm_pressure": _hm_pressure_vec(),
                     },
                     os.path.join(checkpoint_dir, "best_guard.pt"),
                 )
@@ -2423,6 +2441,7 @@ def train(config=None):
         "worker_optimizer": worker_trainer.optimizer.state_dict(),
         "meta_optimizer": meta_trainer.optimizer.state_dict(),
         "config": vars(config.ppo),
+        "hm_pressure": _hm_pressure_vec(),
     }
     if delivery_constraint is not None:
         final_ckpt_data["lagrangian_state"] = {

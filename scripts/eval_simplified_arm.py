@@ -65,6 +65,8 @@ def main(argv=None) -> int:
     ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--layers", type=int, default=2)
+    ap.add_argument("--obs-pressure-vector", action="store_true",
+                    help="D3: 观测含 7 维逐点压力块；压力值取 checkpoint 的 hm_pressure（冻结）")
     args = ap.parse_args(argv)
 
     ck, w_state, m_state = _load_states(args.checkpoint)
@@ -77,9 +79,9 @@ def main(argv=None) -> int:
     # champion 口径：H=4 → d_user=25；未剪 obs_dim = 25*24+3 = 603
     d_user = 13 + args.obs_history_window * 3
     K = 24
-    obs_dim = d_user * K + 3
+    d_global = 3 + (7 if args.obs_pressure_vector else 0)
+    obs_dim = d_user * K + d_global
     action_dim = cont_dim + K          # 连续块 + 解码序
-    d_global = obs_dim - K * d_user
 
     print(f"### Arm A 精简评估: {args.checkpoint}")
     print(f"    obs_dim={obs_dim} d_user={d_user} action_dim={action_dim} "
@@ -120,9 +122,14 @@ def main(argv=None) -> int:
         cfg.system.obs_prune_constant_blocks = False
         cfg.system.obs_history_window = args.obs_history_window
         cfg.system.obs_history_features = ("h_gains", "queue", "power")
+        cfg.system.obs_pressure_vector = args.obs_pressure_vector
         cfg.ppo.worker_d_user = d_user
         env = RSMAEnergyEnv(cfg)
         assert env.obs_dim == obs_dim, f"env.obs_dim={env.obs_dim} != {obs_dim}"
+        if args.obs_pressure_vector:
+            _pv = ck.get("hm_pressure")
+            env.set_pressure_vector(
+                np.asarray(_pv if _pv is not None else np.zeros(7), dtype=np.float64))
 
         def action_fn(obs, env, _p=policy):
             o = torch.as_tensor(obs[None, :], dtype=torch.float32)

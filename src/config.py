@@ -61,6 +61,11 @@ class SystemConfig:
     #: 论文冠军（best_guard.pt，obs 603）为未剪遗留口径：训练/评估需显式
     #: obs_prune_constant_blocks=False（temporal wrapper 默认关，见其 flag）。
     obs_prune_constant_blocks: bool = True
+    #: D3（M3 Stage-1）：逐点压力向量观测（默认关，obs 结构与历史完全一致）。
+    #: 开启后在 global 尾追加 7 维块 = 归一化逐点短差 shortfall/shortfall_max
+    #: （复用硬例挖掘的 7 点 EMA，引理 L 的"逐点压力"建设性输入）。
+    #: obs_dim 变化：armA 口径 243→250；未剪 H=4 口径 603→610（zeta 口径 604→611）。
+    obs_pressure_vector: bool = False
 
     # 预编码 / 接收机方案
     # "rzf": 统一 MRT 发射 + MMSE-SIC 接收 (默认, 设计文档 2026-06-05)

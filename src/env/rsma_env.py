@@ -210,6 +210,9 @@ class RSMAEnergyEnv(gym.Env):
         self.zeta_cap = 1.0
         if self.zeta_enabled:
             self._obs_dim += 1
+        # D3 (M3): 逐点压力向量观测 —— 全局尾追加 7 维
+        if bool(getattr(self.config.system, "obs_pressure_vector", False)):
+            self._obs_dim += 7
 
         # Task#38: Group-level α 架构开关。开启后 split_mask 被作为
         # per-user 连续 α 值【覆盖】Worker 的 α 输出（而非仅作二值 gate）。
@@ -226,6 +229,9 @@ class RSMAEnergyEnv(gym.Env):
 
         # ---- 分层 PPO 追踪变量 ----
         self.split_mask: np.ndarray = np.ones(self.K, dtype=np.float32)
+        self.obs_pressure_vector: bool = bool(
+            getattr(self.config.system, "obs_pressure_vector", False))
+        self._pressure_vector: Optional[np.ndarray] = None   # 7 维归一化逐点短差
         self.group_ids: np.ndarray = np.zeros(self.K, dtype=np.int64)
         self.decoding_order: Optional[np.ndarray] = None
         self._prev_rates: np.ndarray = np.zeros(self.K, dtype=np.float64)
@@ -605,6 +611,11 @@ class RSMAEnergyEnv(gym.Env):
         if self.zeta_enabled:
             obs = np.append(obs, np.float64(
                 np.clip(self._delivery_target / max(self.zeta_cap, 1e-8), 0.0, 2.0)))
+
+        # D3 (M3): 逐点压力向量观测 —— 追加 7 维归一化短差（引理 L 建设性输入）
+        if self.obs_pressure_vector:
+            pv = self._pressure_vector if self._pressure_vector is not None else np.zeros(7)
+            obs = np.append(obs, np.asarray(pv, dtype=np.float64))
 
         # 分层模式: 追加 power_budget_normalized
         if self.hierarchical_enabled:
@@ -997,6 +1008,13 @@ class RSMAEnergyEnv(gym.Env):
     def _ablation(self):
         """获取 ablation 配置（不存在时返回 None）。"""
         return getattr(self.config, 'ablation', None)
+
+    def set_pressure_vector(self, pv: np.ndarray) -> None:
+        """D3: 注入 7 维逐点压力（归一化短差 ∈ [0,1]；epoch 级别慢变量，reset 不重设）。"""
+        arr = np.asarray(pv, dtype=np.float64).reshape(-1)
+        if arr.size != 7:
+            raise ValueError(f"pressure vector 须为 7 维，收到 {arr.size}")
+        self._pressure_vector = np.clip(arr, 0.0, 1.0)
 
     def set_split_mask(self, split_mask: np.ndarray) -> None:
         """设置慢时间尺度分裂决策（由 Meta-Controller 调用）。

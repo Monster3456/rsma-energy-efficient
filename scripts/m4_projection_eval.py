@@ -32,9 +32,14 @@ from scripts.evaluate_snr_sweep import (  # noqa: E402
     build_config_for_snr,
     load_meta_model,
 )
+from scripts.eval_simplified_arm import (  # noqa: E402
+    _continuous_dim,
+    _head_dim,
+    _load_states,
+)
 from scripts.evaluate_snr_sweep_temporal import make_temporal_config_cls  # noqa: E402
-from scripts.interpretability_analysis import load_worker  # noqa: E402
 from src.env.rsma_env import RSMAEnergyEnv  # noqa: E402
+from src.models.actor_critic import ActorCriticAttn  # noqa: E402
 from src.optimization.solver_expert import SolverExpert  # noqa: E402
 
 K = 24
@@ -129,6 +134,11 @@ def main(argv=None) -> int:
     ap.add_argument("--cert_slots", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=50)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--obs-pressure-vector", action="store_true",
+                    help="D3: 观测含 7 维压力块（env 维度 +7；压力取 checkpoint hm_pressure 冻结注入）")
+    ap.add_argument("--hidden", type=int, default=128)
+    ap.add_argument("--heads", type=int, default=4)
+    ap.add_argument("--layers", type=int, default=2)
     args = ap.parse_args(argv)
 
     points = [int(x) for x in args.points.split(",")] if args.points != "all" else ALL_POINTS
@@ -141,11 +151,32 @@ def main(argv=None) -> int:
         cfg.system.obs_prune_constant_blocks = False
         cfg.system.obs_history_window = 4
         cfg.system.obs_history_features = ("h_gains", "queue", "power")
+        cfg.system.obs_pressure_vector = args.obs_pressure_vector
         cfg.ppo.worker_d_user = 13 + 4 * 3
+        ck_full, w_state, _m_state = _load_states(args.checkpoint)
+        if args.obs_pressure_vector:
+            _pv = ck_full.get("hm_pressure")
+            _pv_arr = np.asarray(_pv if _pv is not None else np.zeros(7), dtype=np.float64)
+        d_user = 13 + 4 * 3
+        d_global = 3 + (7 if args.obs_pressure_vector else 0)
+        obs_dim = d_user * K + d_global
+        action_dim = _continuous_dim(w_state) + K
+        simplified = _head_dim(w_state) == 2
         env = RSMAEnergyEnv(cfg)
-        assert env.obs_dim == 25 * K + 3, f"env.obs_dim={env.obs_dim}"
-        expert = SolverExpert(env, n_steps=1, simplified_action=False)
-        worker = load_worker(args.checkpoint, env)
+        assert env.obs_dim == obs_dim, f"env.obs_dim={env.obs_dim} != {obs_dim}"
+        if args.obs_pressure_vector:
+            env.set_pressure_vector(_pv_arr)
+        expert = SolverExpert(env, n_steps=1, simplified_action=simplified)
+        worker = ActorCriticAttn(
+            obs_dim=obs_dim, action_dim=action_dim, K=K, d_user=d_user,
+            d_global=d_global, hidden_dim=args.hidden, n_heads=args.heads,
+            n_attn_layers=args.layers, use_plackett_luce=True,
+            simplified_action=simplified,
+        )
+        _mm, _uu = worker.load_state_dict(w_state, strict=False)
+        if _mm or _uu:
+            print(f"[warn] worker missing={_mm} unexpected={_uu}")
+        worker.eval()
         meta_ac, t_s, err = load_meta_model(args.checkpoint, env)
         if err is not None:
             print(f"[warn] meta 加载失败({err})，meta off")

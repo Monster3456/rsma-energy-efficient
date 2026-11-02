@@ -48,6 +48,11 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64, help='Mini-batch size')
     parser.add_argument('--obs_history_window', type=int, default=None,
                         help='时序历史观测窗口长度 H（覆盖 system.obs_history_window，默认 0=关闭）')
+    parser.add_argument('--csi_eps_arm', action='store_true',
+                        help='D4: 训练期 CSI 误差界域随机化（扩高误差包络）')
+    parser.add_argument('--csi_eps_min', type=float, default=None)
+    parser.add_argument('--csi_eps_max', type=float, default=None)
+    parser.add_argument('--csi_eps_keep_prob', type=float, default=None)
     parser.add_argument('--obs_pressure_vector', action='store_true',
                         help='D3: 观测追加 7 维逐点压力向量（HM EMA 短差归一化）')
     parser.add_argument('--obs_prune_constant_blocks', action='store_true',
@@ -314,6 +319,13 @@ if __name__ == "__main__":
         config.system.obs_history_window = args.obs_history_window
     config.system.obs_prune_constant_blocks = args.obs_prune_constant_blocks
     config.system.obs_pressure_vector = args.obs_pressure_vector
+    config.system.csi_eps_arm = args.csi_eps_arm
+    if args.csi_eps_min is not None:
+        config.system.csi_eps_min = args.csi_eps_min
+    if args.csi_eps_max is not None:
+        config.system.csi_eps_max = args.csi_eps_max
+    if args.csi_eps_keep_prob is not None:
+        config.system.csi_eps_keep_prob = args.csi_eps_keep_prob
 
     # 注入消融标志
     config.ablation.disable_split = args.disable_split

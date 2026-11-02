@@ -66,6 +66,14 @@ class SystemConfig:
     #: （复用硬例挖掘的 7 点 EMA，引理 L 的"逐点压力"建设性输入）。
     #: obs_dim 变化：armA 口径 243→250；未剪 H=4 口径 603→610（zeta 口径 604→611）。
     obs_pressure_vector: bool = False
+    #: D4（M3 高误差界优化）：训练期 CSI 误差界域随机化（默认关，行为与历史一致）。
+    #: 开启后每 episode 以 keep_prob 保留原 snr_dependent 工况，否则取固定 ε~U[min,max]
+    #: 并注入 env.channel（不更动不可变 channel.py；运行时属性突变）。
+    #: 目的：把训练包络扩到高固定 ε，学习 ε² 干扰主导区的控制律。
+    csi_eps_arm: bool = False
+    csi_eps_min: float = 0.02
+    csi_eps_max: float = 0.2
+    csi_eps_keep_prob: float = 0.5
 
     # 预编码 / 接收机方案
     # "rzf": 统一 MRT 发射 + MMSE-SIC 接收 (默认, 设计文档 2026-06-05)

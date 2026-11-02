@@ -1129,6 +1129,22 @@ def train(config=None):
         _smax = max(float(_short.max()), 1e-8)
         return [round(float(x), 6) for x in _short / _smax]
 
+    # D4: 训练期 CSI 误差界域随机化（扩高误差包络；运行时注入 channel 属性，
+    # 不触碰不可变 channel.py）。keep_prob 时保留原 snr_dependent 工况防遗忘。
+    csi_eps_on = bool(getattr(config.system, "csi_eps_arm", False))
+    _eps_rng = np.random.default_rng(config.seed + 997)
+    _eps_lo = float(getattr(config.system, "csi_eps_min", 0.02))
+    _eps_hi = float(getattr(config.system, "csi_eps_max", 0.2))
+    _eps_keep = float(getattr(config.system, "csi_eps_keep_prob", 0.5))
+
+    def _sample_csi_eps():
+        if csi_eps_on:
+            if _eps_rng.random() < _eps_keep:
+                env.channel.snr_dependent_csi = True
+            else:
+                env.channel.snr_dependent_csi = False
+                env.channel.epsilon_csi = float(_eps_rng.uniform(_eps_lo, _eps_hi))
+
     obs, _ = env.reset(seed=config.seed, options=reset_options)
     _set_worker_bucket(worker_ac, env)
 
@@ -2018,6 +2034,9 @@ def train(config=None):
                         link_coef=getattr(config.ppo, 'entropy_link_coef', 1.0),
                     )
                     reset_options = {'snr_db': sampled_snr}
+                # D4: 新 episode 采样 CSI 误差界（置于 reset 之前，channel.reset 即以该 ε 生成 H_hat；
+                #    对象属性变异，不触碰不可变 channel.py）
+                _sample_csi_eps()
                 obs, _ = env.reset(options=reset_options)
                 _set_worker_bucket(worker_ac, env)
 

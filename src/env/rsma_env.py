@@ -213,6 +213,9 @@ class RSMAEnergyEnv(gym.Env):
         # D3 (M3): 逐点压力向量观测 —— 全局尾追加 7 维
         if bool(getattr(self.config.system, "obs_pressure_vector", False)):
             self._obs_dim += 7
+        # R1 (M3): 联合导频 —— 全局尾追加 1 维
+        if bool(getattr(self.config.system, "pilot_adaptive", False)):
+            self._obs_dim += 1
 
         # Task#38: Group-level α 架构开关。开启后 split_mask 被作为
         # per-user 连续 α 值【覆盖】Worker 的 α 输出（而非仅作二值 gate）。
@@ -232,6 +235,12 @@ class RSMAEnergyEnv(gym.Env):
         self.obs_pressure_vector: bool = bool(
             getattr(self.config.system, "obs_pressure_vector", False))
         self._pressure_vector: Optional[np.ndarray] = None   # 7 维归一化逐点短差
+        # R1: 联合导频（慢尺度，episode 边界注入 channel._pilot_power）
+        self.pilot_adaptive: bool = bool(getattr(self.config.system, "pilot_adaptive", False))
+        self.pilot_power_min: float = float(getattr(self.config.system, "pilot_power_min", 0.25))
+        self.pilot_power_max: float = float(getattr(self.config.system, "pilot_power_max", 16.0))
+        self._pilot_power: Optional[float] = None
+        self._pilot_cost_w: float = float(getattr(self.config.system, "pilot_cost_w", 2.0))
         self.group_ids: np.ndarray = np.zeros(self.K, dtype=np.int64)
         self.decoding_order: Optional[np.ndarray] = None
         self._prev_rates: np.ndarray = np.zeros(self.K, dtype=np.float64)
@@ -617,6 +626,11 @@ class RSMAEnergyEnv(gym.Env):
             pv = self._pressure_vector if self._pressure_vector is not None else np.zeros(7)
             obs = np.append(obs, np.asarray(pv, dtype=np.float64))
 
+        # R1 (M3): 联合导频 —— 全局尾追加 1 维导频归一（P_pilot/max）
+        if self.pilot_adaptive:
+            _pnom = self._pilot_power / self.pilot_power_max if self._pilot_power else 0.0
+            obs = np.append(obs, np.float64(np.clip(_pnom, 0.0, 1.0)))
+
         # 分层模式: 追加 power_budget_normalized
         if self.hierarchical_enabled:
             if self.P_target is not None:
@@ -932,6 +946,9 @@ class RSMAEnergyEnv(gym.Env):
         reward = float(rew_info["reward"])
         if not np.isfinite(reward):
             reward = -1e3  # 数值兜底, 避免 NaN/Inf 污染训练
+        # R1: 导频能量成本（策略为此付费 → Dinkelbach EE 以外的最小化通道）
+        if self.pilot_adaptive and self._pilot_power is not None:
+            reward -= self._pilot_cost_w * (self._pilot_power / self.pilot_power_max)
 
         # 8. 信道演化
         self._channel_obs = self.channel.step()
@@ -1008,6 +1025,14 @@ class RSMAEnergyEnv(gym.Env):
     def _ablation(self):
         """获取 ablation 配置（不存在时返回 None）。"""
         return getattr(self.config, 'ablation', None)
+
+    def set_pilot_power(self, p: float) -> None:
+        """R1: 注入每 episode 导频功率 P_pilot（σ_est² = σ²/(K·P_pilot) + ε_floor²）。"""
+        if not self.pilot_adaptive:
+            return
+        self._pilot_power = float(np.clip(p, self.pilot_power_min, self.pilot_power_max))
+        if hasattr(self.channel, "_pilot_power"):
+            self.channel._pilot_power = self._pilot_power
 
     def set_pressure_vector(self, pv: np.ndarray) -> None:
         """D3: 注入 7 维逐点压力（归一化短差 ∈ [0,1]；epoch 级别慢变量，reset 不重设）。"""

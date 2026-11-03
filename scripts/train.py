@@ -48,6 +48,10 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64, help='Mini-batch size')
     parser.add_argument('--obs_history_window', type=int, default=None,
                         help='时序历史观测窗口长度 H（覆盖 system.obs_history_window，默认 0=关闭）')
+    parser.add_argument('--pilot_adaptive', action='store_true',
+                        help='R1: 联合导频-传输分配（Meta 慢尺度 P_pilot，episode 边界注入）')
+    parser.add_argument('--pilot_cost_w', type=float, default=None,
+                        help='导频能量奖励成本权重（覆盖 system.pilot_cost_w）')
     parser.add_argument('--csi_eps_arm', action='store_true',
                         help='D4: 训练期 CSI 误差界域随机化（扩高误差包络）')
     parser.add_argument('--csi_eps_min', type=float, default=None)
@@ -319,6 +323,9 @@ if __name__ == "__main__":
         config.system.obs_history_window = args.obs_history_window
     config.system.obs_prune_constant_blocks = args.obs_prune_constant_blocks
     config.system.obs_pressure_vector = args.obs_pressure_vector
+    config.system.pilot_adaptive = args.pilot_adaptive
+    if args.pilot_cost_w is not None:
+        config.system.pilot_cost_w = args.pilot_cost_w
     config.system.csi_eps_arm = args.csi_eps_arm
     if args.csi_eps_min is not None:
         config.system.csi_eps_min = args.csi_eps_min

@@ -292,6 +292,9 @@ def _meta_decide(meta_ac: MetaActorCritic, env: RSMAEnergyEnv, device: torch.dev
         # Arm C: 慢尺度交付目标 ζ → env（写观测 + 改 DVQ 目标）
         if getattr(meta_ac, 'last_zeta', None) is not None:
             env.set_delivery_target(meta_ac.last_zeta)
+        # R1: 导频预算 P_pilot → env（慢尺度；episode 起点/T_s 边界经 _meta_decide 注入）
+        if getattr(meta_ac, 'last_pilot', None) is not None:
+            env.set_pilot_power(meta_ac.last_pilot)
         # Buffer 存储原始采样 (n_groups,)，供 PPO log_prob 重计算
         action_for_buffer = meta_ac.last_raw_alpha.detach().cpu().numpy().astype(np.float32)
     else:
@@ -818,6 +821,7 @@ def train(config=None):
             config.hierarchical, 'group_alpha_log_std_init', -0.5
         ),
         zeta_enabled=bool(getattr(config.hierarchical, 'meta_zeta_enabled', False)),
+        pilot_enabled=bool(getattr(config.system, 'pilot_adaptive', False)),
     ).to(device)
     meta_buffer = MetaRolloutBuffer(max_size=500)
     meta_trainer = MetaPPOTrainer(meta_ac, config.hierarchical)
@@ -1954,7 +1958,10 @@ def train(config=None):
                 meta_buffer.store(
                     prev_meta_obs, prev_split,
                     prev_log_prob, meta_reward, prev_value,
-                    done=True, group_action=prev_group_ids
+                    done=True, group_action=prev_group_ids,
+                    pilot_action=(meta_ac.last_raw_pilot.detach().cpu().numpy().astype(np.float32)
+                                  if getattr(meta_ac, 'pilot_enabled', False)
+                                  and meta_ac.last_raw_pilot is not None else None)
                 )
                 meta_segment_rewards.append(meta_reward)
                 meta_stats = _empty_meta_stats()
@@ -2057,7 +2064,10 @@ def train(config=None):
                 meta_buffer.store(
                     prev_meta_obs, prev_split,
                     prev_log_prob, meta_reward, prev_value,
-                    done=False, group_action=prev_group_ids
+                    done=False, group_action=prev_group_ids,
+                    pilot_action=(meta_ac.last_raw_pilot.detach().cpu().numpy().astype(np.float32)
+                                  if getattr(meta_ac, 'pilot_enabled', False)
+                                  and meta_ac.last_raw_pilot is not None else None)
                 )
                 meta_segment_rewards.append(meta_reward)
                 meta_stats = _empty_meta_stats()

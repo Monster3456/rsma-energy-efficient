@@ -40,6 +40,7 @@ class MetaActorCritic(nn.Module):
     
     def __init__(self, K: int, d_user: int = 6, hidden_dim: int = 64,
                  n_heads: int = 4, n_groups: int = 4, zeta_enabled: bool = False,
+                 pilot_enabled: bool = False,
                  group_tau_init: float = 2.0, group_tau_min: float = 0.5,
                  balance_coef: float = 0.1,
                  group_level_alpha: bool = False,
@@ -134,6 +135,19 @@ class MetaActorCritic(nn.Module):
         nn.init.constant_(self.zeta_head.bias, -2.0)   # 初始 sigmoid≈0.12 → ζ≈0.56
         self.last_zeta = None
 
+        # R1: 慢尺度导频预算 P_pilot（恒建头；pilot_enabled 时作为可学习动作分量：
+        # Gaussian raw → sigmoid → [min, max]，log_prob 进 meta PPO loss）。
+        # 经 self.last_pilot / last_raw_pilot 暴露；容错加载与 zeta_head 同模式。
+        self.pilot_enabled = bool(pilot_enabled)
+        self.pilot_power_min = 0.25
+        self.pilot_power_max = 16.0
+        self.pilot_head = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.pilot_head.weight)
+        nn.init.constant_(self.pilot_head.bias, -2.0)   # 初始 sigmoid≈0.12 → ~2.1W
+        self.pilot_log_std = nn.Parameter(torch.full((1,), -1.0))
+        self.last_pilot = None
+        self.last_raw_pilot = None
+
         # Critic head: 全局状态价值
         self.critic_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -157,6 +171,13 @@ class MetaActorCritic(nn.Module):
             sd["zeta_head.bias"] = torch.full_like(self.zeta_head.bias, -2.0)
         elif len(have) == 1:
             raise RuntimeError(f"zeta_head 键不完整: {have}")
+        pilot_keys = ("pilot_head.weight", "pilot_head.bias")
+        have_p = [k for k in pilot_keys if k in sd]
+        if len(have_p) == 0:
+            sd["pilot_head.weight"] = torch.zeros_like(self.pilot_head.weight)
+            sd["pilot_head.bias"] = torch.full_like(self.pilot_head.bias, -2.0)
+        elif len(have_p) == 1:
+            raise RuntimeError(f"pilot_head 键不完整: {have_p}")
         return super().load_state_dict(sd, strict=strict)
 
     def _init_weights(self):
@@ -223,6 +244,8 @@ class MetaActorCritic(nn.Module):
         
         # Arm C：慢尺度交付目标 ζ（仅 zeta_enabled 时计算）
         self._zeta_raw = self.zeta_head(pooled) if self.zeta_enabled else None
+        # R1: 导频预算原始 logit（恒算，供 act 暴露 last_pilot）
+        self._pilot_raw = self.pilot_head(pooled)
         return split_or_alpha, group_logits, value
     
     def _map_alpha(self, raw_alpha: torch.Tensor) -> torch.Tensor:
@@ -231,6 +254,11 @@ class MetaActorCritic(nn.Module):
         α = α_min + (α_max - α_min) * sigmoid(raw_alpha)
         """
         return self.group_alpha_min + self._alpha_span * torch.sigmoid(raw_alpha)
+
+    def _map_pilot(self, raw_pilot: torch.Tensor) -> torch.Tensor:
+        """R1: 原始 Gaussian 采样 raw_pilot 映射到 [P_min, P_max]（sigmoid）。"""
+        return (self.pilot_power_min
+                + (self.pilot_power_max - self.pilot_power_min) * torch.sigmoid(raw_pilot))
 
     def expand_user_alphas(self, group_alphas: torch.Tensor,
                            group_ids: torch.Tensor) -> torch.Tensor:
@@ -273,6 +301,22 @@ class MetaActorCritic(nn.Module):
         if self.zeta_enabled and getattr(self, "_zeta_raw", None) is not None:
             zr = self._zeta_raw.reshape(-1)[0].detach()
             self.last_zeta = float(self.zeta_min + (self.zeta_max - self.zeta_min) * torch.sigmoid(zr))
+        # R1: 导频预算（pilot_enabled 时可学习动作；否则确定性暴露供 env 注入）
+        if getattr(self, "_pilot_raw", None) is not None and self.pilot_enabled:
+            _pr = self._pilot_raw.detach().reshape(-1)          # (1,)
+            _pstd = torch.exp(self.pilot_log_std).clamp(min=1e-3, max=2.0)
+            _pdist = Normal(_pr, _pstd)
+            _rawp = _pr if deterministic else _pdist.sample()
+            _plp = _pdist.log_prob(_rawp).sum()
+            _pilot_val = self._map_pilot(_rawp).reshape(-1)[0]
+            self.last_pilot = float(_pilot_val.detach())
+            self.last_raw_pilot = _rawp.detach()
+            _pilot_log_prob = _plp
+        else:
+            _pilot_log_prob = torch.zeros((), device=user_features.device)
+            if getattr(self, "_pilot_raw", None) is not None:
+                _pv = self._map_pilot(self._pilot_raw.detach().reshape(-1)[0])
+                self.last_pilot = float(_pv)
         group_logits = group_logits.squeeze(0)  # (K, G)
         value = value.squeeze()  # scalar
 
@@ -297,7 +341,7 @@ class MetaActorCritic(nn.Module):
             mapped_group_alphas = self._map_alpha(raw_alpha)  # (n_groups,)
             user_alphas = self.expand_user_alphas(mapped_group_alphas, group_ids)  # (K,)
 
-            total_log_prob = alpha_log_prob + group_log_prob
+            total_log_prob = alpha_log_prob + group_log_prob + _pilot_log_prob
             # 缓存原始采样以供外部存储 (numpy)
             self.last_raw_alpha = raw_alpha.detach()
             return user_alphas, group_ids, total_log_prob, value
@@ -310,12 +354,13 @@ class MetaActorCritic(nn.Module):
         else:
             split_mask = split_dist.sample()  # (K,)
         split_log_prob = split_dist.log_prob(split_mask).sum()
-        total_log_prob = split_log_prob + group_log_prob
+        total_log_prob = split_log_prob + group_log_prob + _pilot_log_prob
         return split_mask, group_ids, total_log_prob, value
     
     def evaluate_actions(self, user_features: torch.Tensor,
                          split_actions: torch.Tensor,
-                         group_actions: torch.Tensor | None = None
+                         group_actions: torch.Tensor | None = None,
+                         pilot_actions: torch.Tensor | None = None
                          ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """评估已有动作的 log_prob, value, entropy (用于 PPO 更新)。
 
@@ -359,6 +404,15 @@ class MetaActorCritic(nn.Module):
             split_entropy = split_dist.entropy().sum(dim=-1)
             total_log_prob = split_log_prob + group_log_prob
 
+        # R1: 导频 log_prob + 熵（已存动作重算，供 PPO ratio）
+        if self.pilot_enabled and pilot_actions is not None:
+            _pr = self._pilot_raw                                       # (B,1)
+            _pstd = torch.exp(self.pilot_log_std).clamp(min=1e-3, max=2.0)
+            _pdist = Normal(_pr, _pstd)
+            _plp = _pdist.log_prob(pilot_actions).sum(dim=-1)          # (B,)
+            total_log_prob = total_log_prob + _plp
+            split_entropy = split_entropy + _pdist.entropy().sum(dim=-1)
+
         total_entropy = split_entropy + group_entropy
         return total_log_prob, values.squeeze(-1), split_entropy, group_entropy, total_entropy
 
@@ -396,6 +450,7 @@ class MetaRolloutBuffer:
         self.user_features = []
         self.actions = []           # split actions
         self.group_actions = []     # group actions
+        self.pilot_actions = []     # R1: 导频原始采样
         self.log_probs = []
         self.rewards = []
         self.values = []
@@ -407,22 +462,26 @@ class MetaRolloutBuffer:
     
     def store(self, user_features: np.ndarray, action: np.ndarray,
               log_prob: float, reward: float, value: float, done: bool = False,
-              group_action: np.ndarray | None = None):
+              group_action: np.ndarray | None = None,
+              pilot_action: np.ndarray | None = None):
         """存储一个 meta transition。"""
         self.user_features.append(user_features)
         self.actions.append(action)
         self.group_actions.append(group_action if group_action is not None
                                   else np.zeros_like(action, dtype=np.int64))
+        self.pilot_actions.append(pilot_action if pilot_action is not None
+                                  else np.zeros((), dtype=np.float32))
         self.log_probs.append(log_prob)
         self.rewards.append(reward)
         self.values.append(value)
         self.dones.append(done)
-        
+
         # 超过容量时丢弃最旧的
         if len(self.rewards) > self.max_size:
             self.user_features.pop(0)
             self.actions.pop(0)
             self.group_actions.pop(0)
+            self.pilot_actions.pop(0)
             self.log_probs.pop(0)
             self.rewards.pop(0)
             self.values.pop(0)
@@ -472,6 +531,7 @@ class MetaRolloutBuffer:
         features_t = torch.FloatTensor(np.array(self.user_features)).to(device)
         actions_t = torch.FloatTensor(np.array(self.actions)).to(device)
         group_actions_t = torch.LongTensor(np.array(self.group_actions)).to(device)
+        pilot_actions_t = torch.FloatTensor(np.array(self.pilot_actions)).to(device)
         old_log_probs_t = torch.FloatTensor(np.array(self.log_probs)).to(device)
         returns_t = torch.FloatTensor(returns).to(device)
         advantages_t = torch.FloatTensor(advantages).to(device)
@@ -489,6 +549,7 @@ class MetaRolloutBuffer:
                 'user_features': features_t[idx],
                 'split_actions': actions_t[idx],
                 'group_actions': group_actions_t[idx],
+                'pilot_actions': pilot_actions_t[idx],
                 'old_log_probs': old_log_probs_t[idx],
                 'returns': returns_t[idx],
                 'advantages': advantages_t[idx],
@@ -541,13 +602,15 @@ class MetaPPOTrainer:
                 features = batch['user_features']
                 split_actions = batch['split_actions']
                 group_actions = batch['group_actions']
+                pilot_actions = batch.get('pilot_actions')
                 old_log_probs = batch['old_log_probs']
                 returns = batch['returns']
                 advantages = batch['advantages']
-                
+
                 # 评估当前策略下的 log_prob, value, entropy
                 new_log_probs, values, split_entropy, group_entropy, total_entropy = (
-                    self.meta_ac.evaluate_actions(features, split_actions, group_actions)
+                    self.meta_ac.evaluate_actions(features, split_actions, group_actions,
+                                                  pilot_actions)
                 )
                 
                 # PPO clip loss

@@ -74,6 +74,14 @@ class SystemConfig:
     csi_eps_min: float = 0.02
     csi_eps_max: float = 0.2
     csi_eps_keep_prob: float = 0.5
+    #: R1（M3 高误差界优化）：联合导频-传输分配（默认关）。
+    #: 开启后 Meta 慢尺度输出 P_pilot∈[min,max]，episode 边界注入 env.channel
+    #: （运行时属性；σ_est²=σ²/(K·P_pilot)+ε_floor²），obs 追加 1 维导频归一，
+    #: 奖励减 pilot_cost_w·(P_pilot/max) 计导频能量成本（EE 常规口径在报告侧另计）。
+    pilot_adaptive: bool = False
+    pilot_power_min: float = 0.25
+    pilot_power_max: float = 16.0
+    pilot_cost_w: float = 2.0
 
     # 预编码 / 接收机方案
     # "rzf": 统一 MRT 发射 + MMSE-SIC 接收 (默认, 设计文档 2026-06-05)

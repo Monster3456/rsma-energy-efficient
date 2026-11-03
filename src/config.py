@@ -74,6 +74,10 @@ class SystemConfig:
     csi_eps_min: float = 0.02
     csi_eps_max: float = 0.2
     csi_eps_keep_prob: float = 0.5
+    #: R1 变体：ε_floor 训练混合（保持 snr_dependent=True，变 ε_floor——导频杠杆
+    #: 只在 snr_dependent 口径下起作用）。keep_prob 保留原始地板 0.01，否则地板
+    #: ~U[csi_eps_min, csi_eps_max]（R1 目标区常取 0.1–0.2）。
+    csi_eps_floor_arm: bool = False
     #: R1（M3 高误差界优化）：联合导频-传输分配（默认关）。
     #: 开启后 Meta 慢尺度输出 P_pilot∈[min,max]，episode 边界注入 env.channel
     #: （运行时属性；σ_est²=σ²/(K·P_pilot)+ε_floor²），obs 追加 1 维导频归一，

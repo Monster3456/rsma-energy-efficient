@@ -52,6 +52,8 @@ if __name__ == "__main__":
                         help='R1: 联合导频-传输分配（Meta 慢尺度 P_pilot，episode 边界注入）')
     parser.add_argument('--pilot_cost_w', type=float, default=None,
                         help='导频能量奖励成本权重（覆盖 system.pilot_cost_w）')
+    parser.add_argument('--csi_eps_floor_arm', action='store_true',
+                        help='R1: ε_floor 训练混合（保 snr_dependent，变地板；导频杠杆只在此时有效）')
     parser.add_argument('--csi_eps_arm', action='store_true',
                         help='D4: 训练期 CSI 误差界域随机化（扩高误差包络）')
     parser.add_argument('--csi_eps_min', type=float, default=None)
@@ -327,6 +329,7 @@ if __name__ == "__main__":
     if args.pilot_cost_w is not None:
         config.system.pilot_cost_w = args.pilot_cost_w
     config.system.csi_eps_arm = args.csi_eps_arm
+    config.system.csi_eps_floor_arm = args.csi_eps_floor_arm
     if args.csi_eps_min is not None:
         config.system.csi_eps_min = args.csi_eps_min
     if args.csi_eps_max is not None:

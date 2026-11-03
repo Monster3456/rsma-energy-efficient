@@ -1136,13 +1136,21 @@ def train(config=None):
     # D4: 训练期 CSI 误差界域随机化（扩高误差包络；运行时注入 channel 属性，
     # 不触碰不可变 channel.py）。keep_prob 时保留原 snr_dependent 工况防遗忘。
     csi_eps_on = bool(getattr(config.system, "csi_eps_arm", False))
+    _eps_floor_on = bool(getattr(config.system, "csi_eps_floor_arm", False))
     _eps_rng = np.random.default_rng(config.seed + 997)
     _eps_lo = float(getattr(config.system, "csi_eps_min", 0.02))
     _eps_hi = float(getattr(config.system, "csi_eps_max", 0.2))
     _eps_keep = float(getattr(config.system, "csi_eps_keep_prob", 0.5))
 
     def _sample_csi_eps():
-        if csi_eps_on:
+        if csi_eps_on and _eps_floor_on:
+            # R1：在地板上做混合（snr_dependent 保持 True → 导频杠杆有效）
+            env.channel.snr_dependent_csi = True
+            if _eps_rng.random() >= _eps_keep:
+                env.channel._epsilon_floor = float(_eps_rng.uniform(_eps_lo, _eps_hi))
+            else:
+                env.channel._epsilon_floor = 0.01
+        elif csi_eps_on:
             if _eps_rng.random() < _eps_keep:
                 env.channel.snr_dependent_csi = True
             else:
